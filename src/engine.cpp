@@ -454,7 +454,7 @@ bool DarkCastleEngine::load_chapters_from_sqlite() {
     }
   }
 
-  // FIXED: Query specifically pulls "card_type" instead of "type" to align with your schema script
+  // Query specifically pulls "card_type" instead of "type" to align with your schema script
   const char* query = 
       "SELECT id, title, flavor_text, card_type, attack_damage, enemy_shields, "
       "choice_1_text, choice_1_damage, choice_1_shields, choice_2_text, choice_2_damage, choice_2_shields, "
@@ -490,7 +490,7 @@ bool DarkCastleEngine::load_chapters_from_sqlite() {
       card.choice_2_text     = safe_sqlite_string(stmt, 9);
       card.choice_2_damage   = sqlite3_column_int(stmt, 10);
 
-      // FIXED: Reads target_attribute securely as a string token type
+      // Reads target_attribute securely as a string token type
       std::string attr_str = safe_sqlite_string(stmt, 12);
       if (!attr_str.empty()) {
         char ac = attr_str.at(0);
@@ -677,7 +677,7 @@ void DarkCastleEngine::execute_challenge_roll_step() {
 
 
 void DarkCastleEngine::execute_combat_round() {
-  // --- YOUR ORIGINAL RESTORED FIRST IF STATEMENT ---
+  // --- RESTORED ORIGINAL FIRST IF STATEMENT ---
   if (live_enemy_shields.empty() || is_awaiting_prompt_choice || is_awaiting_reroll_choice || game_over) {
     return;
   }
@@ -696,16 +696,76 @@ void DarkCastleEngine::execute_combat_round() {
   }
 
   // ==============================================================================
-  // STEP A: THE ACTIVE ATTACKER'S DICE STRIKE PASS
+  // FIX: RE-ENFORCE COMBAT REST PASS BYPASS MACHINE GATES
   // ==============================================================================
   if (resting_character == current_acting_player_id) {
     int old_hp = actor->current_hp;
     actor->current_hp = std::min(actor->current_hp + 1, actor->max_hp);
-    add_to_game_log(actor->name + " is resting this step, recovering +1 HP (" + 
+    add_to_game_log(actor->name + " is resting, recovering +1 HP (" + 
                     std::to_string(old_hp) + "->" + std::to_string(actor->current_hp) + ")");
-  } 
-  else if (!actor->dice_faces.empty()) {
-    // Roll from the active player's unique dice array template
+
+    // Clear their dice display card slot so it stays empty while they sit out the round
+    if (current_acting_player_id == 1) hero_last_roll_str = "";
+    else                               companion_last_roll_str = "";
+
+    // Safely check if this step completes the full round loop
+    bool round_is_complete = (current_acting_player_id != current_door_opener_id);
+
+    if (!round_is_complete) {
+      // Pass the dice context over to the active teammate without rolling any attack traits
+      current_acting_player_id = next_player_id;
+      add_to_game_log("It is now " + ((current_acting_player_id == 1) ? hero.name : companion.name) + "'s turn to strike.");
+    } 
+    else {
+      // Both characters finished their phase steps (one fought, one rested). Execute enemy retaliation!
+      current_acting_player_id = current_door_opener_id;
+      add_to_game_log("The enemy counter-attacks!");
+
+      int incoming_base_damage = active_card.attack_damage;
+
+      auto apply_enemy_damage = [&](Prisoner& p_actor, std::vector<ItemCard>& p_inv, int char_id, bool has_rolled_block) {
+        if (resting_character == char_id || has_rolled_block) return; // Resting characters are safe from counter-attacks
+
+        int armor_mod = 0;
+        bool heavy_shield_spent = false;
+
+        auto item_it = p_inv.begin();
+        while (item_it != p_inv.end()) {
+          if (item_it->special_action_type == "PERMANENT_PLATE_ARMOR") {
+            armor_mod += item_it->attack_amount;
+            ++item_it;
+          } else if (item_it->special_action_type == "HEAVY_SHIELD_ROUND") {
+            heavy_shield_spent = true;
+            item_it = p_inv.erase(item_it);
+          } else {
+            ++item_it;
+          }
+        }
+
+        if (heavy_shield_spent) return;
+
+        int final_damage = std::max(0, incoming_base_damage - armor_mod);
+        if (final_damage > 0) {
+          p_actor.current_hp = std::max(0, p_actor.current_hp - final_damage);
+          add_to_game_log(p_actor.name + " sustained -" + std::to_string(final_damage) + " enemy combat damage!");
+        }
+      };
+
+      apply_enemy_damage(hero, hero_inventory, 1, hero_blocked_this_round);
+      apply_enemy_damage(companion, companion_inventory, 2, comp_blocked_this_round);
+
+      if (hero.current_hp <= 0 || companion.current_hp <= 0) {
+        game_over = true;
+        add_to_game_log("A companion has fallen in battle! The run has failed.");
+      }
+    }
+    return; // Exit out immediately to bypass the lower dice rolling code execution paths!
+  }
+
+  // ==============================================================================
+  // STEP A: THE ACTIVE ATTACKER'S DICE STRIKE PASS (Executed ONLY if NOT resting)
+  // ==============================================================================
+  if (!actor->dice_faces.empty()) {
     // Roll from the active player's unique dice array template
     DieFace rolled_face = actor->dice_faces.at(rand() % actor->dice_faces.size());
 
@@ -736,6 +796,7 @@ void DarkCastleEngine::execute_combat_round() {
     for (const auto& item : inv) {
       if (item.is_weapon) weapon_mod = item.special_action_type;
     }
+
     // ==============================================================================
     // PASS 3: INTERACTIVE RE-ROLL WEAPON AND SHIELD TRAITS
     // ==============================================================================
@@ -759,6 +820,9 @@ void DarkCastleEngine::execute_combat_round() {
       return; // Freeze lower combat processing frames while choice is pending
     }
 
+    // ==============================================================================
+    // STEP A-2: STANDARD SHIELD MATCHING & ERASURE LOOPS
+    // ==============================================================================
     int shields_to_erase = 0;
     auto it = std::find(live_enemy_shields.begin(), live_enemy_shields.end(), base_trait);
 
@@ -834,7 +898,7 @@ void DarkCastleEngine::execute_combat_round() {
       int final_damage = std::max(0, incoming_base_damage - armor_mod);
       if (final_damage > 0) {
         p_actor.current_hp = std::max(0, p_actor.current_hp - final_damage);
-        add_to_game_log(p_actor.name + " sustained -" + std::to_string(final_damage) + " enemy combat damage!");
+        add_to_game_log(p_actor.name + " sustained -" + std::to_string(final_damage) + " damage!");
       }
     };
 
@@ -844,11 +908,10 @@ void DarkCastleEngine::execute_combat_round() {
 
     if (hero.current_hp <= 0 || companion.current_hp <= 0) {
       game_over = true;
-      add_to_game_log("A companion has fallen in battle! The run has failed.");
+      add_to_game_log("A companion has fallen! The run has failed.");
     }
   }
 }
-
 
 void DarkCastleEngine::process_input_event(int keycode) {
   // ==============================================================================
@@ -955,7 +1018,7 @@ if (game_over) {
           is_awaiting_prompt_choice = true;
         }
 
-        // --- FIX 1: AUTOMATICALLY RESOLVE LETHAL ENVIRONMENT TRAPS ON ENTRY (P1) ---
+        // AUTOMATICALLY RESOLVE LETHAL ENVIRONMENT TRAPS ON ENTRY (P1) ---
         if (active_card.type == CardType::NARRATIVE_EVENT) {
           room_is_completed = true; // Instantly unblock the progression gate
           if (active_card.trap_damage > 0) {
@@ -996,7 +1059,7 @@ if (game_over) {
           is_awaiting_prompt_choice = true;
         }
 
-        // --- FIX 2: AUTOMATICALLY RESOLVE LETHAL ENVIRONMENT TRAPS ON ENTRY (P2) ---
+        // AUTOMATICALLY RESOLVE LETHAL ENVIRONMENT TRAPS ON ENTRY (P2) ---
         if (active_card.type == CardType::NARRATIVE_EVENT) {
           room_is_completed = true; // Instantly unblock the progression gate
           if (active_card.trap_damage > 0) {
@@ -1104,7 +1167,7 @@ if (game_over) {
         if (give_item_to_character(target_inv, pending_looted_item)) {
           is_awaiting_loot_choice = false;
 
-          // --- FIX: IF A DOUBLE LOOT ROOM IS ACTIVE, IMMEDIATELY QUEUE THE SECOND REWARD ITEM CARD ---
+          // IF A DOUBLE LOOT ROOM IS ACTIVE, IMMEDIATELY QUEUE THE SECOND REWARD ITEM CARD ---
           if (active_card.reward_type == "DOUBLE_ITEM" && !room_is_completed) {
             // Mark room_is_completed to true to note that the first piece of loot is stowed
             room_is_completed = true;
@@ -1229,9 +1292,16 @@ if (game_over) {
         DieFace roll = actor->dice_faces.at(rand() % actor->dice_faces.size());
         bool scored = (roll == active_card.target_attribute);
 
-        std::string roll_name = (roll == DieFace::MIGHT) ? "Might" : 
-                                (roll == DieFace::CUNNING) ? "Cunning" : 
+        std::string roll_name = (roll == DieFace::MIGHT) ? "Might" :
+                                (roll == DieFace::CUNNING) ? "Cunning" :
                                 (roll == DieFace::WISDOM) ? "Wisdom" : "Shield";
+
+        // RECORD PUZZLE ROLL OUTCOMES NATIVELY INTO HOOK STRINGS
+        if (current_door_opener_id == 1) {
+          hero_last_roll_str = roll_name;
+        } else {
+          companion_last_roll_str = roll_name;
+        }
 
         if (scored) {
           challenge_successes_gained++;
@@ -1245,18 +1315,29 @@ if (game_over) {
           add_to_game_log("Challenge Complete! Room threats resolved safely.");
           room_is_completed = true;
           distribute_challenge_reward(active_card);
-        } 
+        }
         else if (challenge_attempts_left <= 0) {
           actor->current_hp -= active_card.failure_damage;
           add_to_game_log(actor->name + " ran out of attempts! Triggered trap: -" + std::to_string(active_card.failure_damage) + " HP.");
-          room_is_completed = true; 
+          room_is_completed = true;
         }
 
         if (hero.current_hp <= 0 || companion.current_hp <= 0) game_over = true;
         return;
-      } 
+      }
       else {
-        execute_combat_round();
+        // COMBAT CARDS TRIGGER THE ANIMATION TIMERS FIRST ---
+        if (!is_dice_animating) {
+          is_dice_animating = true;
+          dice_anim_frame_counter = 0;
+          
+          // Wipe the old string text instantly so the box is empty during the rolling animation
+          if (current_acting_player_id == 1) {
+            hero_last_roll_str = "";
+          } else {
+            companion_last_roll_str = "";
+          }
+        }
         return;
       }
     }
@@ -1265,7 +1346,7 @@ if (game_over) {
     // ACTION INTERACTION E: CORE TURN-BASED RECOVERY CONTROLLER ('R' KEY)
     // --------------------------------------------------------------------------
     if (keycode == ALLEGRO_KEY_R && !game_over && !room_is_completed) {
-      // FIX: Rest actions are strictly illegal during life-threatening puzzle challenges!
+      // Rest actions are strictly illegal during life-threatening puzzle challenges!
       if (active_card.type == CardType::SKILL_CHALLENGE) {
         add_to_game_log("You cannot rest!");
         return; // Reject the input stream immediately
@@ -1502,7 +1583,7 @@ void DarkCastleEngine::render_active_tabletop_loop() {
                            500, 22, ALLEGRO_ALIGN_CENTER, active_card.flavor_text.c_str());
   }
 
-  // FIX: This baseline variable now manages your vertical stack offsets beautifully
+  // This baseline variable now manages your vertical stack offsets beautifully
   int challenge_y_baseline = center_y + 65 + (line_count * 22);
 
   // ==============================================================================
@@ -1622,6 +1703,7 @@ void DarkCastleEngine::render_active_tabletop_loop() {
   } // Closes the safety gate
   // Animated Dice indicator text boxes
 
+/*
   if (is_dice_animating) {
     al_draw_filled_rectangle(340, center_y - 40, 460, center_y + 10, al_map_rgba(0, 0, 0, 220));
     al_draw_rectangle(340, center_y - 40, 460, center_y + 10, al_map_rgb(255, 215, 0), 2);
@@ -1630,9 +1712,10 @@ void DarkCastleEngine::render_active_tabletop_loop() {
     snprintf(roll_view, sizeof(roll_view), "ROLLING: %c  %c", p1_rolling_flicker_char, p2_rolling_flicker_char);
     al_draw_text(local_font, al_map_rgb(255, 255, 255), 512, center_y - 20, ALLEGRO_ALIGN_CENTER, roll_view);
   }
+*/
 
   // ==============================================================================
-  // FIX: CORE PHASE PROMPT BANNER DRIFTED ABOVE SAFETY INTERCEPTS
+  // CORE PHASE PROMPT BANNER DRIFTED ABOVE SAFETY INTERCEPTS
   // ==============================================================================
   // Set to 572 to position it right in the empty black layout bar above HUD panels safely
   int base_prompt_y = 572; 
@@ -1982,6 +2065,7 @@ void DarkCastleEngine::draw_scene_frame() {
   if (is_dice_animating && !game_over) {
     dice_anim_frame_counter++;
 
+    // Character literal array avoids string allocation overhead on every single tick pass
     char options[] = {'M', 'C', 'W', 'S'};
     p1_rolling_flicker_char = options[rand() % 4];
     p2_rolling_flicker_char = options[rand() % 4];
@@ -1989,6 +2073,9 @@ void DarkCastleEngine::draw_scene_frame() {
     if (dice_anim_frame_counter >= 30) {
       is_dice_animating = false;
       dice_anim_frame_counter = 0;
+      // EXECUTE THE COMBAT STEP CALCULATIONS NATIVELY ON ANIMATION SETTLE ---
+      execute_combat_round();
+      // Fire contextual audio hooks matching the newly settled active face card
       play_context_dice_sfx(active_rolled_face);
     }
   }
@@ -2105,7 +2192,7 @@ void DarkCastleEngine::play_context_dice_sfx(DieFace finalized_face) {
   size_t target_sample_idx =
       0;  // Default index 0 is our standard rattle impact
 
-  // FIX: Dynamically route audio assets depending on the internal enum values
+  // Dynamically route audio assets depending on the internal enum values
   if (finalized_face == DieFace::SHIELD) {
     // Switch to the shield bounce/clash sound if index 1 exists
     if (bone_dice_samples.size() > 1) {

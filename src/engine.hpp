@@ -131,6 +131,9 @@ class DarkCastleEngine {
   char p1_rolling_flicker_char = 'M';
   char p2_rolling_flicker_char = 'W';
 
+  std::string hero_last_roll_str = "";      // P1 last roll string container
+  std::string companion_last_roll_str = ""; // P2 last roll string container
+
  public:
   DarkCastleEngine();
   ~DarkCastleEngine();

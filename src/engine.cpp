@@ -706,6 +706,7 @@ void DarkCastleEngine::execute_combat_round() {
   } 
   else if (!actor->dice_faces.empty()) {
     // Roll from the active player's unique dice array template
+    // Roll from the active player's unique dice array template
     DieFace rolled_face = actor->dice_faces.at(rand() % actor->dice_faces.size());
 
     std::string base_trait = "Blank";
@@ -714,11 +715,20 @@ void DarkCastleEngine::execute_combat_round() {
     if (rolled_face == DieFace::WISDOM)  base_trait = "Wisdom";
     if (rolled_face == DieFace::SHIELD)  base_trait = "Shield";
 
+    // ==============================================================================
+    // FIX 1: CAPTURE AND ASSIGN LAST ROLL RESULTS LOCALIZED TO INDIVIDUAL CHARACTERS
+    // ==============================================================================
+    if (current_acting_player_id == 1) {
+      hero_last_roll_str = base_trait;
+    } else {
+      companion_last_roll_str = base_trait;
+    }
+
     if (rolled_face == DieFace::SHIELD) {
       // Store the defensive block state inside your persistent class variables
       if (current_acting_player_id == 1) hero_blocked_this_round = true;
       else                               comp_blocked_this_round = true;
-      add_to_game_log(actor->name + " raised a Shield to prepare for enemy retaliation!");
+      add_to_game_log(actor->name + " raised a Shield!");
     }
 
     // Process weapon modifiers
@@ -726,7 +736,6 @@ void DarkCastleEngine::execute_combat_round() {
     for (const auto& item : inv) {
       if (item.is_weapon) weapon_mod = item.special_action_type;
     }
-
     // ==============================================================================
     // PASS 3: INTERACTIVE RE-ROLL WEAPON AND SHIELD TRAITS
     // ==============================================================================
@@ -1724,6 +1733,47 @@ void DarkCastleEngine::render_active_tabletop_loop() {
 
     std::string label = p.name + (is_resting ? " [REST]" : " [ACT]");
     al_draw_text(local_font, is_resting ? al_map_rgb(50, 180, 50) : text_color, px + 85, player_y + 20, ALLEGRO_ALIGN_LEFT, label.c_str());
+
+    // HUD CHARACTER CARD DICE OVERLAY AND PULSING SPINNING CONTAINERS
+    std::string character_roll = is_hero ? hero_last_roll_str : companion_last_roll_str;
+    bool this_player_is_spinning = (is_dice_animating && current_acting_player_id == (p_idx + 1));
+
+    if (!is_awaiting_door_open && !game_over && (this_player_is_spinning || !character_roll.empty())) {
+      int die_box_x = px + 285;
+      int die_box_y = player_y + 12;
+      int die_size = 40;
+
+      // Assign matching layout properties using your active status monitors
+      ALLEGRO_COLOR die_bg = is_active_attacker ? al_map_rgb(22, 22, 26) : al_map_rgb(15, 15, 15);
+      ALLEGRO_COLOR die_ln = this_player_is_spinning ? al_map_rgb(255, 140, 0) : (is_active_attacker ? al_map_rgb(212, 175, 55) : al_map_rgb(70, 70, 75));
+      int die_thickness = (is_active_attacker || this_player_is_spinning) ? 2 : 1;
+
+      // Draw the structured bounding outline box
+      al_draw_filled_rectangle(die_box_x, die_box_y, die_box_x + die_size, die_box_y + die_size, die_bg);
+      al_draw_rectangle(die_box_x, die_box_y, die_box_x + die_size, die_box_y + die_size, die_ln, die_thickness);
+
+      if (this_player_is_spinning) {
+        // SPINNING STAGE: Draw your global random flickering chars right inside the active slot
+        char flick_char = is_hero ? p1_rolling_flicker_char : p2_rolling_flicker_char;
+        char print_buf[] = {flick_char, '\0'};
+        al_draw_text(local_font, al_map_rgb(255, 140, 0), die_box_x + (die_size / 2), die_box_y + (die_size / 2) - 6,
+                     ALLEGRO_ALIGN_CENTER, print_buf);
+      } 
+      else {
+        // SETTLED STAGE: Draw the permanent shorthand uppercase token letter result representation
+        char shorthand_letter = 'M';
+        ALLEGRO_COLOR shorthand_color = al_map_rgb(200, 200, 200);
+
+        if (character_roll == "Cunning") { shorthand_letter = 'C'; shorthand_color = al_map_rgb(130, 180, 240); }
+        if (character_roll == "Wisdom")  { shorthand_letter = 'W'; shorthand_color = al_map_rgb(190, 140, 240); }
+        if (character_roll == "Shield")  { shorthand_letter = 'S'; shorthand_color = al_map_rgb(150, 240, 150); }
+
+        char print_buf[] = {shorthand_letter, '\0'};
+        al_draw_text(local_font, shorthand_color, die_box_x + (die_size / 2), die_box_y + (die_size / 2) - 6,
+                     ALLEGRO_ALIGN_CENTER, print_buf);
+      }
+    }
+
 
     std::string hp_metrics = "HP: " + std::to_string(p.current_hp) + " / " + std::to_string(p.max_hp);
     al_draw_text(local_font, text_color, px + 85, player_y + 45, ALLEGRO_ALIGN_LEFT, hp_metrics.c_str());

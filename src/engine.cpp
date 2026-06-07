@@ -1104,6 +1104,20 @@ void DarkCastleEngine::process_input_event(int keycode) {
         current_scene = SCENE_GAMEPLAY;
       }
     }
+
+
+    // --- STEP 3: CANCEL SELECTION / UNSELECT OVERRIDE PANEL ---
+    if (keycode == ALLEGRO_KEY_ESCAPE || keycode == ALLEGRO_KEY_BACKSPACE) {
+      if (select_phase == 1) {
+        select_phase = 0; // Drop back to Player 1's choice phase
+        character_cursor_index = p1_char_cursor; // Snap the gold focus box back to Player 1
+        add_to_game_log("Player 1 selection undone. Choose your Hero again.");
+        return;
+      }
+    }
+
+
+
     return;
   }
 
@@ -1647,8 +1661,12 @@ void DarkCastleEngine::render_character_selection_menu() {
   }
 
   // Bottom footer strings centered at 512
-  al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 535, ALLEGRO_ALIGN_CENTER, "Use LEFT / RIGHT arrow keys to navigate rows.");
-  al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 560, ALLEGRO_ALIGN_CENTER, "Press ENTER or SPACE to confirm profile.");
+  //al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 535, ALLEGRO_ALIGN_CENTER, "Use LEFT / RIGHT arrow keys to navigate rows.");
+  //al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 560, ALLEGRO_ALIGN_CENTER, "Press ENTER or SPACE to confirm profile.");
+  // Bottom footer strings centered at 512 inside render_character_selection_menu()
+  std::string cancel_guide = (select_phase == 1) ? " | BACKSPACE to Unselect" : "";
+  std::string instruction_str = "Use LEFT / RIGHT arrow keys to navigate rows" + cancel_guide + ".";
+  al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 535, ALLEGRO_ALIGN_CENTER, instruction_str.c_str());
 }
 
 

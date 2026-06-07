@@ -701,12 +701,11 @@ void DarkCastleEngine::execute_combat_round() {
   if (resting_character == current_acting_player_id) {
     int old_hp = actor->current_hp;
     actor->current_hp = std::min(actor->current_hp + 1, actor->max_hp);
-    add_to_game_log(actor->name + " is resting, recovering +1 HP (" + 
+    add_to_game_log(actor->name + " rested, recovered +1 HP (" + 
                     std::to_string(old_hp) + "->" + std::to_string(actor->current_hp) + ")");
 
-    // Clear their dice display card slot so it stays empty while they sit out the round
-    if (current_acting_player_id == 1) hero_last_roll_str = "";
-    else                               companion_last_roll_str = "";
+    hero_last_roll_str = "";
+    companion_last_roll_str = "";
 
     // Safely check if this step completes the full round loop
     bool round_is_complete = (current_acting_player_id != current_door_opener_id);
@@ -763,9 +762,12 @@ void DarkCastleEngine::execute_combat_round() {
   }
 
   // ==============================================================================
-  // STEP A: THE ACTIVE ATTACKER'S DICE STRIKE PASS (Executed ONLY if NOT resting)
+  // STEP A-2: STANDARD ROLL PASS (Executed ONLY if NOT resting)
   // ==============================================================================
-  if (!actor->dice_faces.empty()) {
+  else if (!actor->dice_faces.empty()) {
+    // FIX A: Lock down the player index on entry frame frame capture
+    int original_roller_id = current_acting_player_id;
+
     // Roll from the active player's unique dice array template
     DieFace rolled_face = actor->dice_faces.at(rand() % actor->dice_faces.size());
 
@@ -775,17 +777,14 @@ void DarkCastleEngine::execute_combat_round() {
     if (rolled_face == DieFace::WISDOM)  base_trait = "Wisdom";
     if (rolled_face == DieFace::SHIELD)  base_trait = "Shield";
 
-    // ==============================================================================
-    // FIX 1: CAPTURE AND ASSIGN LAST ROLL RESULTS LOCALIZED TO INDIVIDUAL CHARACTERS
-    // ==============================================================================
-    if (current_acting_player_id == 1) {
+    // FIX B: Use original_roller_id to guarantee the strings route to the right slots!
+    if (original_roller_id == 1) {
       hero_last_roll_str = base_trait;
     } else {
       companion_last_roll_str = base_trait;
     }
 
     if (rolled_face == DieFace::SHIELD) {
-      // Store the defensive block state inside your persistent class variables
       if (current_acting_player_id == 1) hero_blocked_this_round = true;
       else                               comp_blocked_this_round = true;
       add_to_game_log(actor->name + " raised a Shield!");
@@ -797,9 +796,7 @@ void DarkCastleEngine::execute_combat_round() {
       if (item.is_weapon) weapon_mod = item.special_action_type;
     }
 
-    // ==============================================================================
     // PASS 3: INTERACTIVE RE-ROLL WEAPON AND SHIELD TRAITS
-    // ==============================================================================
     bool has_reroll_gear = false;
     for (const auto& item : inv) {
       if (item.special_action_type == "RE_ROLL_MIGHT" && rolled_face != DieFace::MIGHT) has_reroll_gear = true;
@@ -810,19 +807,16 @@ void DarkCastleEngine::execute_combat_round() {
     // Verify if the active rolled face actually matches an existing enemy shield card
     auto match_it = std::find(live_enemy_shields.begin(), live_enemy_shields.end(), base_trait);
 
-    // If they have matching gear, missed the shields, and didn't roll a protective block, offer a re-roll!
     if (has_reroll_gear && match_it == live_enemy_shields.end() && rolled_face != DieFace::SHIELD) {
       is_awaiting_reroll_choice = true;
       rerolls_remaining_this_turn = 1;
       
       add_to_game_log(actor->name + " missed, but their gear allows a TACTICAL RE-ROLL!");
       add_to_game_log("Press [Y] to roll again | Press [N] to keep original result.");
-      return; // Freeze lower combat processing frames while choice is pending
+      return; 
     }
 
-    // ==============================================================================
-    // STEP A-2: STANDARD SHIELD MATCHING & ERASURE LOOPS
-    // ==============================================================================
+    // STEP A-3: STANDARD SHIELD MATCHING & ERASURE LOOPS
     int shields_to_erase = 0;
     auto it = std::find(live_enemy_shields.begin(), live_enemy_shields.end(), base_trait);
 
@@ -860,7 +854,7 @@ void DarkCastleEngine::execute_combat_round() {
   }
 
   // ==============================================================================
-  // STEP B: TURN ROUTING AND RETALIATION TRIGGERS
+  // STEP B-2: TURN ROUTING AND RETALIATION TRIGGERS FOR STANDARD ATTACK PASSES
   // ==============================================================================
   bool round_is_complete = (current_acting_player_id != current_door_opener_id);
 
@@ -898,20 +892,20 @@ void DarkCastleEngine::execute_combat_round() {
       int final_damage = std::max(0, incoming_base_damage - armor_mod);
       if (final_damage > 0) {
         p_actor.current_hp = std::max(0, p_actor.current_hp - final_damage);
-        add_to_game_log(p_actor.name + " sustained -" + std::to_string(final_damage) + " damage!");
+        add_to_game_log(p_actor.name + " sustained -" + std::to_string(final_damage) + " enemy combat damage!");
       }
     };
 
-    // Evaluate shields using the persistent round flags
     apply_enemy_damage(hero, hero_inventory, 1, hero_blocked_this_round);
     apply_enemy_damage(companion, companion_inventory, 2, comp_blocked_this_round);
 
     if (hero.current_hp <= 0 || companion.current_hp <= 0) {
       game_over = true;
-      add_to_game_log("A companion has fallen! The run has failed.");
+      add_to_game_log("A companion has fallen in battle! The run has failed.");
     }
   }
 }
+
 
 void DarkCastleEngine::process_input_event(int keycode) {
   // ==============================================================================
@@ -1150,6 +1144,7 @@ if (game_over) {
       return;
     }
 
+
     // --------------------------------------------------------------------------
     // ACTION GATE 4: ROOM REWARD LOOT DROP DISTRIBUTION PANEL SELECTOR
     // --------------------------------------------------------------------------
@@ -1160,33 +1155,48 @@ if (game_over) {
       if (keycode == ALLEGRO_KEY_RIGHT || keycode == ALLEGRO_KEY_D) {
         loot_target_player_cursor = 1; // Target P2 Companion
       }
+      
+      // --- FIX A: ESCAPE HATCH - DISCARD INCOMING LOOT ENTIRELY ---
+      if (keycode == ALLEGRO_KEY_X) {
+        is_awaiting_loot_choice = false;
+        
+        add_to_game_log("The party left the " + pending_looted_item.name + " behind in the dust.");
+        
+        // Handle double loot rooms cascading passes safely
+        if (active_card.reward_type == "DOUBLE_ITEM" && !room_is_completed) {
+          room_is_completed = true; // Mark first item pass resolved
+          pending_looted_item = master_treasure_pool.at(rand() % master_treasure_pool.size());
+          is_awaiting_loot_choice = true; // Reload instantly for card #2
+          add_to_game_log("Second Item: " + pending_looted_item.name + "! Allocate or discard.");
+        } else {
+          room_is_completed = true; // Fully unfreeze progression gates
+        }
+        return;
+      }
+
       if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
         std::vector<ItemCard>& target_inv = (loot_target_player_cursor == 0) ? hero_inventory : companion_inventory;
         Prisoner& target_prisoner = (loot_target_player_cursor == 0) ? hero : companion;
 
         if (give_item_to_character(target_inv, pending_looted_item)) {
-          is_awaiting_loot_choice = false;
+          is_awaiting_loot_choice = false; 
 
-          // IF A DOUBLE LOOT ROOM IS ACTIVE, IMMEDIATELY QUEUE THE SECOND REWARD ITEM CARD ---
           if (active_card.reward_type == "DOUBLE_ITEM" && !room_is_completed) {
-            // Mark room_is_completed to true to note that the first piece of loot is stowed
-            room_is_completed = true;
-            // Pull a completely new piece of gear from the treasure repository pool
+            room_is_completed = true; 
             pending_looted_item = master_treasure_pool.at(rand() % master_treasure_pool.size());
-            // Re-open the modal panel instantly on the next frame loop pass
-            is_awaiting_loot_choice = true;
-
+            is_awaiting_loot_choice = true; 
             add_to_game_log("Second Item: " + pending_looted_item.name + "! Assign to your characters.");
           } else {
-            // Normal single-reward or final item clearing pass sets room completion true
-            room_is_completed = true;
+            room_is_completed = true; 
           }
         } else {
-          add_to_game_log("Failed: " + target_prisoner.name + "'s inventory is FULL!");
+          // Play a small warning note in your central log box
+          add_to_game_log("Inventory Full! " + target_prisoner.name + " cannot carry this. Press [X] to discard.");
         }
       }
       return;
     }
+
 
     // --------------------------------------------------------------------------
     // ACTION GATE 5: BRANCHING PATHS OPTIONS CHOICE HANDLER (card_type = 2)
@@ -1337,6 +1347,11 @@ if (game_over) {
           } else {
             companion_last_roll_str = "";
           }
+          // SAFETY OVERRIDE: If the NEXT player inline is resting, clear their box too
+          // so old lingering cards don't stay drawn on screen!
+          if (resting_character == 1) hero_last_roll_str = "";
+          if (resting_character == 2) companion_last_roll_str = "";
+
         }
         return;
       }
@@ -1789,6 +1804,30 @@ void DarkCastleEngine::render_active_tabletop_loop() {
       }
     }
 
+    // ==============================================================================
+    // EMERGENCY LOW-HP FLASHING INDICATOR HIGHLIGHT MATRIX
+    // ==============================================================================
+    if (p.current_hp > 0 && p.current_hp < 4) {
+      double pulse_wave = (sin(al_get_time() * 7.5) + 1.0) / 2.0;
+      int red_component = 110 + static_cast<int>(pulse_wave * 145);
+
+      if (draw_fully_opaque) {
+        // --- STANCE A: ACTIVE PLAYER LOW-HP EFFECT ---
+        frame_color = al_map_rgb(red_component, 20, 20); 
+        frame_line_thickness = 3;                       
+        text_color = al_map_rgb(255, 180, 180);          
+      } 
+      else {
+        // --- STANCE B: INACTIVE PLAYER LOW-HP EFFECT (FADED RED) ---
+        int faded_red = 40 + static_cast<int>(pulse_wave * 60); 
+        
+        frame_color = al_map_rgb(faded_red, 15, 15);
+        frame_line_thickness = 1; 
+        text_color = al_map_rgb(180, 120, 120); 
+      }
+    }
+
+    // Draw outer boundary container rectangle frame utilizing our calculated thickness rules
     al_draw_rectangle(px, player_y, px + 340, player_y + 130, frame_color, frame_line_thickness);
 
     int img_id = 0;
@@ -1800,10 +1839,14 @@ void DarkCastleEngine::render_active_tabletop_loop() {
     else if (p.name == "The Miller") img_id = 5;
 
     if (prisoner_textures[img_id]) {
+      bool is_low_hp = (p.current_hp > 0 && p.current_hp < 4);
       if (draw_fully_opaque) {
         al_draw_bitmap(prisoner_textures[img_id], px + 10, player_y + 15, 0);
       } else if (is_resting) {
         al_draw_tinted_bitmap(prisoner_textures[img_id], al_map_rgba(40, 80, 40, 90), px + 10, player_y + 15, 0);
+      } else if (is_low_hp) {
+        // TINT THE INACTIVE DANGER PROFILE AVATAR WITH FADED TRANSPARENT CRIMSON ALPHAS ---
+        al_draw_tinted_bitmap(prisoner_textures[img_id], al_map_rgba(140, 30, 30, 110), px + 10, player_y + 15, 0);
       } else {
         al_draw_tinted_bitmap(prisoner_textures[img_id], al_map_rgba(255, 255, 255, 110), px + 10, player_y + 15, 0);
       }
@@ -2291,8 +2334,9 @@ void DarkCastleEngine::render_loot_distribution_overlay() {
   al_draw_text(local_font, c_text, b2_x1 + (btn_w / 2), choice_y + 12, ALLEGRO_ALIGN_CENTER, companion.name.c_str());
 
   // 4. Interaction Instructions Guide Footnote
-  al_draw_text(local_font, al_map_rgb(90, 90, 95), center_x, y2 - 25,
-               ALLEGRO_ALIGN_CENTER, "Navigate: [LEFT/RIGHT Arrows]  |  Confirm: [ENTER / SPACEBAR]");
+  std::string nav_string = "Navigate: [LEFT/RIGHT Arrows]  |  Confirm: [ENTER/SPACEBAR]  |  Discard: [X]";
+  al_draw_text(local_font, al_map_rgb(150, 150, 155), center_x, y2 - 30,
+               ALLEGRO_ALIGN_CENTER, nav_string.c_str());
 }
 
 void DarkCastleEngine::render_victory_splash_overlay() {

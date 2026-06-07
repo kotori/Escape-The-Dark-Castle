@@ -134,6 +134,11 @@ class DarkCastleEngine {
   std::string hero_last_roll_str = "";      // P1 last roll string container
   std::string companion_last_roll_str = ""; // P2 last roll string container
 
+
+  int p1_heal_flash_timer = 0;              // P1 heal text timer (in frames)
+  int p2_heal_flash_timer = 0;              // P2 heal text timer (in frames)
+  int p1_heal_flash_amount = 0;             // P1 +HP text string value
+  int p2_heal_flash_amount = 0;             // P2 +HP text string value
  public:
   DarkCastleEngine();
   ~DarkCastleEngine();

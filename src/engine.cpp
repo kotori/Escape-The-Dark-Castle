@@ -132,14 +132,26 @@ bool DarkCastleEngine::consume_item_from_slot(std::vector<ItemCard>& inventory,
     int old_hp = target.current_hp;
     target.current_hp = std::min(target.current_hp + item.heal_amount, target.max_hp);
     
+    // ==============================================================================
+    // SEED FLOATING GREEN TEXT ANIMATION POOLS
+    // ==============================================================================
+    // Detect which character inventory slot triggered the consumption logic
+    if (target.name == hero.name) {
+      p1_heal_flash_timer = 45; // Start a 45-frame animation loop
+      p1_heal_flash_amount = item.heal_amount;
+    } else {
+      p2_heal_flash_timer = 45;
+      p2_heal_flash_amount = item.heal_amount;
+    }
+
     add_to_game_log(target.name + " consumed " + item.name + ". Healed +" + 
                     std::to_string(item.heal_amount) + " HP (" + 
                     std::to_string(old_hp) + "->" + std::to_string(target.current_hp) + ")");
     
-    // Destroy the consumed provision item from the player inventory vector
     inventory.erase(inventory.begin() + slot_idx);
     return true;
   }
+
 
   // ==============================================================================
   // PASS 2: TACTICAL POTION BYPASS BREWS (Skips rolling to break a shield card)

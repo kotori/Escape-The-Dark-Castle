@@ -31,6 +31,12 @@ class DarkCastleEngine {
   std::vector<ItemCard> master_treasure_pool;
   std::vector<ALLEGRO_SAMPLE*> bone_dice_samples;
 
+  // SELECTION TRACKERS FOR CHARACTER MENUS
+//  int p1_menu_index = 0;  // Tracks Player 1's grid cursor slot selection position
+//  int p2_menu_index = 1;  // Tracks Player 2's grid cursor slot selection position
+  int p1_char_cursor = 0;  // Position track for Player 1 menu selection
+  int p2_char_cursor = 1;  // Position track for Player 2 menu selection
+
   // Stores ongoing combat, choice, or loot text notifications
   std::vector<std::string> game_log_history;
   void add_to_game_log(const std::string& message);
@@ -113,7 +119,6 @@ class DarkCastleEngine {
   void draw_ui_overlay_prompts();
   void setup_active_challenge(ChapterCard card);
 
-  void render_game_over_lose_screen();
   void render_game_victory_screen();
 
   bool consume_item_from_slot(std::vector<ItemCard>& inventory,

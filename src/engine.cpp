@@ -32,7 +32,8 @@ DarkCastleEngine::DarkCastleEngine() {
   // Automatically register visual textures from file paths before runtime loops
   // launch
   load_all_item_textures();
-
+  p1_char_cursor = 0;  // Player 1 begins safely on index slot 0 (The Abbot)
+  p2_char_cursor = 1;  // Player 2 begins safely on index slot 1 (The Tailor)
   current_scene = SCENE_MAIN_MENU;
   menu_cursor_index = 0;
   select_phase = 0;
@@ -689,7 +690,6 @@ void DarkCastleEngine::execute_challenge_roll_step() {
 
 
 void DarkCastleEngine::execute_combat_round() {
-  // --- RESTORED ORIGINAL FIRST IF STATEMENT ---
   if (live_enemy_shields.empty() || is_awaiting_prompt_choice || is_awaiting_reroll_choice || game_over) {
     return;
   }
@@ -708,7 +708,7 @@ void DarkCastleEngine::execute_combat_round() {
   }
 
   // ==============================================================================
-  // FIX: RE-ENFORCE COMBAT REST PASS BYPASS MACHINE GATES
+  // RE-ENFORCE COMBAT REST PASS BYPASS MACHINE GATES
   // ==============================================================================
   if (resting_character == current_acting_player_id) {
     int old_hp = actor->current_hp;
@@ -976,86 +976,131 @@ void DarkCastleEngine::execute_combat_round() {
 
 
 void DarkCastleEngine::process_input_event(int keycode) {
+  // Clear any game over states if a keystroke occurs during full splash frames
+  if (game_over) {
+    if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
+      game_over = false;
+      player_won = false;
+      resting_character = 0;
+      hero_last_roll_str = "";
+      companion_last_roll_str = "";
+      current_scene = SCENE_MAIN_MENU;
+      add_to_game_log("Returned to title. Prepare for another escape attempt!");
+    }
+    return;
+  }
+
   // ==============================================================================
-  // ROUTER GATE A: MAIN MENU NAVIGATION STATE LOOP
+  // SCENE CONTEXT LOOP A: MAIN TITLE SELECTION PROCESSING SCREEN
   // ==============================================================================
   if (current_scene == SCENE_MAIN_MENU) {
+    // Up and Down keys are mapped to toggle your menu_cursor_index highlight positions
     if (keycode == ALLEGRO_KEY_UP || keycode == ALLEGRO_KEY_W) {
-      menu_cursor_index = 0;
+      menu_cursor_index = 0; // Highlight [ ENTER THE CASTLE ]
     }
     if (keycode == ALLEGRO_KEY_DOWN || keycode == ALLEGRO_KEY_S) {
-      menu_cursor_index = 1;
+      menu_cursor_index = 1; // Highlight [ ABANDON RUN ]
     }
+
     if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
-      if (menu_cursor_index == 0) {
+      if (menu_cursor_index == 1) {
+        add_to_game_log("Exiting game run...");
+        exit(0);
+      }
+      else {
+        // Shift cleanly into character selection configurations
         current_scene = SCENE_CHARACTER_SELECT;
-        select_phase = 0;
-        character_cursor_index = 0;
-      } else {
-        // Exit requested, flag game over to drop out of client execution loop
-        game_over = true;
+        add_to_game_log("Flipped to Character Select cells.");
       }
     }
     return;
   }
 
+
   // ==============================================================================
-  // ROUTER GATE B: CHARACTER DRAFT PHASE MENU STATE LOOP
+  // SCENE CONTEXT LOOP B: COOPERATIVE PRISONER ROW SELECTOR MENUS
   // ==============================================================================
   if (current_scene == SCENE_CHARACTER_SELECT) {
-    int max_c = std::min(6, static_cast<int>(prisoner_db_pool.size()));
-    if (max_c == 0) return;
-    
-    if (keycode == ALLEGRO_KEY_LEFT || keycode == ALLEGRO_KEY_A) {
-      character_cursor_index = (character_cursor_index - 1 + max_c) % max_c;
-    }
-    if (keycode == ALLEGRO_KEY_RIGHT || keycode == ALLEGRO_KEY_D) {
-      character_cursor_index = (character_cursor_index + 1) % max_c;
-    }
-      
-    if (keycode == ALLEGRO_KEY_SPACE || keycode == ALLEGRO_KEY_ENTER) {
-      Prisoner chosen = prisoner_db_pool.at(character_cursor_index);
-      if (select_phase == 0) {
-        hero = chosen;
+    if (select_phase == 0) {
+      if (keycode == ALLEGRO_KEY_LEFT || keycode == ALLEGRO_KEY_A) {
+        p1_char_cursor = (p1_char_cursor - 1 + 6) % 6;
+      }
+      if (keycode == ALLEGRO_KEY_RIGHT || keycode == ALLEGRO_KEY_D) {
+        p1_char_cursor = (p1_char_cursor + 1) % 6;
+      }
+      character_cursor_index = p1_char_cursor;
+
+      if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
         select_phase = 1;
-      } else {
-        if (hero.name == chosen.name) return;
-        companion = chosen;
-        
-        // Seeding database structures into live cache pools
-        load_items_from_sqlite();
-        load_chapters_from_sqlite();
+        if (p2_char_cursor == p1_char_cursor) {
+          p2_char_cursor = (p2_char_cursor + 1) % 6;
+        }
+        character_cursor_index = p2_char_cursor;
+        add_to_game_log("Player 1 locked choice. Player 2 choose your prisoner.");
+        return;
+      }
+    }
+    else if (select_phase == 1) {
+      static double phase_1_start_time = 0.0;
+      if (phase_1_start_time == 0.0) phase_1_start_time = al_get_time();
+
+      if (keycode == ALLEGRO_KEY_LEFT || keycode == ALLEGRO_KEY_A) {
+        p2_char_cursor = (p2_char_cursor - 1 + 6) % 6;
+      }
+      if (keycode == ALLEGRO_KEY_RIGHT || keycode == ALLEGRO_KEY_D) {
+        p2_char_cursor = (p2_char_cursor + 1) % 6;
+      }
+      character_cursor_index = p2_char_cursor;
+
+      if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
+        if ((al_get_time() - phase_1_start_time) < 0.22) return;
+
+        if (p1_char_cursor == p2_char_cursor) {
+          add_to_game_log("Selection Blocked: Both players cannot choose the exact same prisoner!");
+          return;
+        }
+
+        // Final attributes allocations
+        if (p1_char_cursor == 0) { hero.name = "The Abbot"; hero.max_hp = 12; hero.dice_faces = {DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::WISDOM, DieFace::SHIELD, DieFace::SHIELD}; }
+        else if (p1_char_cursor == 1) { hero.name = "The Tailor"; hero.max_hp = 18; hero.dice_faces = {DieFace::CUNNING, DieFace::CUNNING, DieFace::WISDOM, DieFace::WISDOM, DieFace::MIGHT, DieFace::SHIELD}; }
+        else if (p1_char_cursor == 2) { hero.name = "The Smith"; hero.max_hp = 16; hero.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::MIGHT, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
+        else if (p1_char_cursor == 3) { hero.name = "The Cook"; hero.max_hp = 14; hero.dice_faces = {DieFace::CUNNING, DieFace::CUNNING, DieFace::CUNNING, DieFace::MIGHT, DieFace::WISDOM, DieFace::SHIELD}; }
+        else if (p1_char_cursor == 4) { hero.name = "The Tanner"; hero.max_hp = 15; hero.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::CUNNING, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
+        else if (p1_char_cursor == 5) { hero.name = "The Miller"; hero.max_hp = 17; hero.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::CUNNING, DieFace::SHIELD}; }
+        hero.current_hp = hero.max_hp;
+
+        if (p2_char_cursor == 0) { companion.name = "The Abbot"; companion.max_hp = 12; companion.dice_faces = {DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::WISDOM, DieFace::SHIELD, DieFace::SHIELD}; }
+        else if (p2_char_cursor == 1) { companion.name = "The Tailor"; companion.max_hp = 18; companion.dice_faces = {DieFace::CUNNING, DieFace::CUNNING, DieFace::WISDOM, DieFace::WISDOM, DieFace::MIGHT, DieFace::SHIELD}; }
+        else if (p2_char_cursor == 2) { companion.name = "The Smith"; companion.max_hp = 16; companion.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::MIGHT, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
+        else if (p2_char_cursor == 3) { companion.name = "The Cook"; companion.max_hp = 14; companion.dice_faces = {DieFace::CUNNING, DieFace::CUNNING, DieFace::CUNNING, DieFace::MIGHT, DieFace::WISDOM, DieFace::SHIELD}; }
+        else if (p2_char_cursor == 4) { companion.name = "The Tanner"; companion.max_hp = 15; companion.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::CUNNING, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
+        else if (p2_char_cursor == 5) { companion.name = "The Miller"; companion.max_hp = 17; companion.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::CUNNING, DieFace::SHIELD}; }
+        companion.current_hp = companion.max_hp;
+
+        select_phase = 0;
+        phase_1_start_time = 0.0;
+
+        hero_inventory.clear();
+        companion_inventory.clear();
+        hero_inv_cursor = 0;
+        companion_inv_cursor = 0;
+        hero_last_roll_str = "";
+        companion_last_roll_str = "";
+
         generate_random_game_deck();
-        
         current_scene = SCENE_GAMEPLAY;
-        add_to_game_log("The cell door hinges snap. Your escape attempt has begun!");
       }
     }
     return;
   }
 
   // ==============================================================================
-  // ROUTER GATE C: ACTIVE DUNGEON CRAWL TABLES STATE LOOP MATRIX
+  // SCENE CONTEXT LOOP C: ACTIVE GAMEPLAY MODE
   // ==============================================================================
   if (current_scene == SCENE_GAMEPLAY) {
     
-
-    if (game_over) {
-      if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
-        // Reset core game state variables completely
-        game_over = false;
-        player_won = false;
-        resting_character = 0;
-        
-        // Flip the scene straight back to the title screen
-        current_scene = SCENE_MAIN_MENU;
-        add_to_game_log("Returned to title. Prepare for another escape attempt!");
-      }
-      return; // Stop any further keys from registering during game over states
-    }
-
     // --------------------------------------------------------------------------
-    // ACTION GATE 1: DOOR FLIP HOOK (Locks lower keys until room leader is chosen)
+    // ACTION GATE 1: DOOR FLIP HOOK
     // --------------------------------------------------------------------------
     if (is_awaiting_door_open) {
       if (keycode == ALLEGRO_KEY_1) {
@@ -1063,7 +1108,6 @@ void DarkCastleEngine::process_input_event(int keycode) {
         current_acting_player_id = 1;
         is_awaiting_door_open = false;
         room_is_completed = false;
-        
         play_door_open_sfx();
         live_enemy_shields.clear();
 
@@ -1080,9 +1124,8 @@ void DarkCastleEngine::process_input_event(int keycode) {
           is_awaiting_prompt_choice = true;
         }
 
-        // AUTOMATICALLY RESOLVE LETHAL ENVIRONMENT TRAPS ON ENTRY (P1) ---
         if (active_card.type == CardType::NARRATIVE_EVENT) {
-          room_is_completed = true; // Instantly unblock the progression gate
+          room_is_completed = true;
           if (active_card.trap_damage > 0) {
             int old_hp = hero.current_hp;
             hero.current_hp = std::max(0, hero.current_hp - active_card.trap_damage);
@@ -1092,10 +1135,9 @@ void DarkCastleEngine::process_input_event(int keycode) {
           }
         }
 
-        if (active_card.has_reward && active_card.reward_type == "DOUBLE_ITEM") {
+        if (active_card.has_reward && (active_card.type == CardType::NARRATIVE_EVENT || active_card.reward_type == "DOUBLE_ITEM")) {
           distribute_challenge_reward(active_card);
         }
-
         add_to_game_log(hero.name + " turned the card and leads the room!");
       }
 
@@ -1104,7 +1146,6 @@ void DarkCastleEngine::process_input_event(int keycode) {
         current_acting_player_id = 2;
         is_awaiting_door_open = false;
         room_is_completed = false;
-        
         play_door_open_sfx();
         live_enemy_shields.clear();
 
@@ -1121,26 +1162,23 @@ void DarkCastleEngine::process_input_event(int keycode) {
           is_awaiting_prompt_choice = true;
         }
 
-        // AUTOMATICALLY RESOLVE LETHAL ENVIRONMENT TRAPS ON ENTRY (P2) ---
         if (active_card.type == CardType::NARRATIVE_EVENT) {
-          room_is_completed = true; // Instantly unblock the progression gate
+          room_is_completed = true;
           if (active_card.trap_damage > 0) {
             int old_hp = companion.current_hp;
             companion.current_hp = std::max(0, companion.current_hp - active_card.trap_damage);
-            add_to_game_log("Ouch! " + companion.name + " triggered a trap! Sustained -" + 
+            add_to_game_log("SNAP! " + companion.name + " triggered a trap! Sustained -" + 
                             std::to_string(active_card.trap_damage) + " damage (" + 
                             std::to_string(old_hp) + " -> " + std::to_string(companion.current_hp) + ")");
           }
         }
 
-        if (active_card.has_reward && active_card.reward_type == "DOUBLE_ITEM") {
+        if (active_card.has_reward && (active_card.type == CardType::NARRATIVE_EVENT || active_card.reward_type == "DOUBLE_ITEM")) {
           distribute_challenge_reward(active_card);
         }
-
         add_to_game_log(companion.name + " turned the card and leads the room!");
       }
 
-      // Quick immediate death check to capture trap spike kills
       if (hero.current_hp <= 0 || companion.current_hp <= 0) game_over = true;
       return;
     }
@@ -1152,35 +1190,30 @@ void DarkCastleEngine::process_input_event(int keycode) {
       Prisoner* current_actor = (current_acting_player_id == 1) ? &hero : &companion;
 
       if (keycode == ALLEGRO_KEY_Y) {
-        is_awaiting_reroll_choice = false; 
+        is_awaiting_reroll_choice = false;
         rerolls_remaining_this_turn = 0;
-        
         add_to_game_log(current_actor->name + " spent a charge to re-roll! Rolling again...");
-        
-        // Force the combat loop to immediately re-evaluate with a fresh attack step
-        execute_combat_round(); 
+        execute_combat_round();
       }
-      
+
       if (keycode == ALLEGRO_KEY_N) {
-        is_awaiting_reroll_choice = false; 
+        is_awaiting_reroll_choice = false;
         rerolls_remaining_this_turn = 0;
-        
         add_to_game_log(current_actor->name + " accepted their current die roll outcome.");
-        
-        // Advance turn routing variables manually to simulate finishing this turn step pass
+
         bool round_is_complete = (current_acting_player_id != current_door_opener_id);
         int next_player_id = (current_acting_player_id == 1) ? 2 : 1;
-        
+
         if (!round_is_complete) {
           current_acting_player_id = next_player_id;
           add_to_game_log("It is now " + ((current_acting_player_id == 1) ? hero.name : companion.name) + "'s turn to strike.");
         } else {
-          // Both players have completed their actions, move directly to enemy retaliation
-          execute_combat_round(); 
+          execute_combat_round();
         }
       }
       return;
     }
+
 
     // --------------------------------------------------------------------------
     // ACTION GATE 3: GREATSWORD COMBAT TARGET INDICES SELECTOR
@@ -1206,82 +1239,72 @@ void DarkCastleEngine::process_input_event(int keycode) {
         if (greatsword_removals_left <= 0 || live_enemy_shields.empty()) {
           is_awaiting_greatsword_choice = false;
         } else {
-          greatsword_shield_cursor = 0; // Adjust tracking index bounds safely
+          greatsword_shield_cursor = 0;
         }
       }
       return;
     }
-
 
     // --------------------------------------------------------------------------
     // ACTION GATE 4: ROOM REWARD LOOT DROP DISTRIBUTION PANEL SELECTOR
     // --------------------------------------------------------------------------
     if (is_awaiting_loot_choice) {
       if (keycode == ALLEGRO_KEY_LEFT || keycode == ALLEGRO_KEY_A) {
-        loot_target_player_cursor = 0; // Target P1 Hero
+        loot_target_player_cursor = 0;
       }
       if (keycode == ALLEGRO_KEY_RIGHT || keycode == ALLEGRO_KEY_D) {
-        loot_target_player_cursor = 1; // Target P2 Companion
+        loot_target_player_cursor = 1;
       }
-      
-      // --- FIX A: ESCAPE HATCH - DISCARD INCOMING LOOT ENTIRELY ---
       if (keycode == ALLEGRO_KEY_X) {
         is_awaiting_loot_choice = false;
-        
         add_to_game_log("The party left the " + pending_looted_item.name + " behind in the dust.");
-        
-        // Handle double loot rooms cascading passes safely
+
         if (active_card.reward_type == "DOUBLE_ITEM" && !room_is_completed) {
-          room_is_completed = true; // Mark first item pass resolved
+          room_is_completed = true;
           pending_looted_item = master_treasure_pool.at(rand() % master_treasure_pool.size());
-          is_awaiting_loot_choice = true; // Reload instantly for card #2
+          is_awaiting_loot_choice = true;
           add_to_game_log("Second Item: " + pending_looted_item.name + "! Allocate or discard.");
         } else {
-          room_is_completed = true; // Fully unfreeze progression gates
+          room_is_completed = true;
         }
         return;
       }
-
       if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
         std::vector<ItemCard>& target_inv = (loot_target_player_cursor == 0) ? hero_inventory : companion_inventory;
         Prisoner& target_prisoner = (loot_target_player_cursor == 0) ? hero : companion;
 
         if (give_item_to_character(target_inv, pending_looted_item)) {
-          is_awaiting_loot_choice = false; 
+          is_awaiting_loot_choice = false;
 
           if (active_card.reward_type == "DOUBLE_ITEM" && !room_is_completed) {
-            room_is_completed = true; 
+            room_is_completed = true;
             pending_looted_item = master_treasure_pool.at(rand() % master_treasure_pool.size());
-            is_awaiting_loot_choice = true; 
+            is_awaiting_loot_choice = true;
             add_to_game_log("Second Item: " + pending_looted_item.name + "! Assign to your characters.");
           } else {
-            room_is_completed = true; 
+            room_is_completed = true;
           }
         } else {
-          // Play a small warning note in your central log box
           add_to_game_log("Inventory Full! " + target_prisoner.name + " cannot carry this. Press [X] to discard.");
         }
       }
       return;
     }
 
-
     // --------------------------------------------------------------------------
-    // ACTION GATE 5: BRANCHING PATHS OPTIONS CHOICE HANDLER (card_type = 2)
+    // ACTION GATE 5: BRANCHING CHOICE ROOM PASS PATH SELECTORS
     // --------------------------------------------------------------------------
     if (active_card.type == CardType::BRANCHING_CHOICE && is_awaiting_prompt_choice) {
-      Prisoner* opener = (current_door_opener_id == 1) ? &hero : &companion;
-
       if (keycode == ALLEGRO_KEY_Y) {
         is_awaiting_prompt_choice = false;
-        add_to_game_log(opener->name + " chose option [Y]: " + active_card.choice_1_text);
-        
+        add_to_game_log("The party selects: Option [Y] -> " + active_card.choice_1_text);
+
         if (active_card.choice_1_damage > 0) {
-          opener->current_hp = std::max(0, opener->current_hp - active_card.choice_1_damage);
-          add_to_game_log(opener->name + " sustained -" + std::to_string(active_card.choice_1_damage) + " choice risk damage!");
+          Prisoner* leader = (current_door_opener_id == 1) ? &hero : &companion;
+          leader->current_hp = std::max(0, leader->current_hp - active_card.choice_1_damage);
+          add_to_game_log(leader->name + " sustained -" + std::to_string(active_card.choice_1_damage) + " trap damage resolving the choices!");
         }
 
-        live_enemy_shields.clear();
         for (const auto& face : active_card.choice_1_shields) {
           if (face == DieFace::MIGHT)   live_enemy_shields.push_back("Might");
           if (face == DieFace::CUNNING) live_enemy_shields.push_back("Cunning");
@@ -1289,23 +1312,20 @@ void DarkCastleEngine::process_input_event(int keycode) {
           if (face == DieFace::SHIELD)  live_enemy_shields.push_back("Shield");
         }
 
-        active_card.type = CardType::STANDARD_COMBAT;
-        if (live_enemy_shields.empty()) {
-          room_is_completed = true;
-          distribute_challenge_reward(active_card);
-        }
+        if (live_enemy_shields.empty()) room_is_completed = true;
+        if (hero.current_hp <= 0 || companion.current_hp <= 0) game_over = true;
       }
 
       if (keycode == ALLEGRO_KEY_N) {
         is_awaiting_prompt_choice = false;
-        add_to_game_log(opener->name + " chose option [N]: " + active_card.choice_2_text);
-        
+        add_to_game_log("The party selects: Option [N] -> " + active_card.choice_2_text);
+
         if (active_card.choice_2_damage > 0) {
-          opener->current_hp = std::max(0, opener->current_hp - active_card.choice_2_damage);
-          add_to_game_log(opener->name + " sustained -" + std::to_string(active_card.choice_2_damage) + " choice risk damage!");
+          Prisoner* leader = (current_door_opener_id == 1) ? &hero : &companion;
+          leader->current_hp = std::max(0, leader->current_hp - active_card.choice_2_damage);
+          add_to_game_log(leader->name + " sustained -" + std::to_string(active_card.choice_2_damage) + " trap damage resolving the choices!");
         }
 
-        live_enemy_shields.clear();
         for (const auto& face : active_card.choice_2_shields) {
           if (face == DieFace::MIGHT)   live_enemy_shields.push_back("Might");
           if (face == DieFace::CUNNING) live_enemy_shields.push_back("Cunning");
@@ -1313,44 +1333,74 @@ void DarkCastleEngine::process_input_event(int keycode) {
           if (face == DieFace::SHIELD)  live_enemy_shields.push_back("Shield");
         }
 
-        active_card.type = CardType::STANDARD_COMBAT;
-        if (live_enemy_shields.empty()) {
-          room_is_completed = true;
-          distribute_challenge_reward(active_card);
-        }
+        if (live_enemy_shields.empty()) room_is_completed = true;
+        if (hero.current_hp <= 0 || companion.current_hp <= 0) game_over = true;
       }
-
-      if (hero.current_hp <= 0 || companion.current_hp <= 0) game_over = true;
-      return; 
-    }
-
-    // --------------------------------------------------------------------------
-    // ACTION INTERACTION A: ACTIVE EQUIPMENT CELL SLOTS SELECTION CURSORS
-    // --------------------------------------------------------------------------
-    if (keycode == ALLEGRO_KEY_Q) hero_inv_cursor = 0;
-    if (keycode == ALLEGRO_KEY_E) hero_inv_cursor = 1;
-
-    if (keycode == ALLEGRO_KEY_U) companion_inv_cursor = 0;
-    if (keycode == ALLEGRO_KEY_O) companion_inv_cursor = 1;
-
-    // --------------------------------------------------------------------------
-    // ACTION INTERACTION B: ACTIVE GEAR CONSUMPTION ENGINE MODIFIERS
-    // --------------------------------------------------------------------------
-    if (keycode == ALLEGRO_KEY_LSHIFT) {
-      consume_item_from_slot(hero_inventory, hero, static_cast<size_t>(hero_inv_cursor));
-    }
-    if (keycode == ALLEGRO_KEY_RSHIFT) {
-      consume_item_from_slot(companion_inventory, companion, static_cast<size_t>(companion_inv_cursor));
+      return;
     }
 
     // --------------------------------------------------------------------------
     // ACTION INTERACTION C: ACTIVE GEAR DISCARDING/DROPPING PROCEDURES
     // --------------------------------------------------------------------------
     if (keycode == ALLEGRO_KEY_BACKSPACE) {
-      discard_item_from_slot(hero_inventory, hero, static_cast<size_t>(hero_inv_cursor));
+      if (!hero_inventory.empty() && hero_inv_cursor < static_cast<int>(hero_inventory.size())) {
+        std::string dropped_item_name = hero_inventory.at(hero_inv_cursor).name;
+        hero_inventory.erase(hero_inventory.begin() + hero_inv_cursor);
+        add_to_game_log(hero.name + " discarded " + dropped_item_name + " to free a slot.");
+        if (hero_inv_cursor > 0) hero_inv_cursor--;
+      } else {
+        add_to_game_log("Action Refused: Chosen slot is already empty!");
+      }
     }
+
     if (keycode == ALLEGRO_KEY_DELETE) {
-      discard_item_from_slot(companion_inventory, companion, static_cast<size_t>(companion_inv_cursor));
+      if (!companion_inventory.empty() && companion_inv_cursor < static_cast<int>(companion_inventory.size())) {
+        std::string dropped_item_name = companion_inventory.at(companion_inv_cursor).name;
+        companion_inventory.erase(companion_inventory.begin() + companion_inv_cursor);
+        add_to_game_log(companion.name + " discarded " + dropped_item_name + " to free a slot.");
+        if (companion_inv_cursor > 0) companion_inv_cursor--;
+      } else {
+        add_to_game_log("Action Refused: Chosen slot is already empty!");
+      }
+    }
+
+    // --------------------------------------------------------------------------
+    // ACTION INTERACTION E: CORE TURN-BASED RECOVERY CONTROLLER ('R' KEY)
+    // --------------------------------------------------------------------------
+    if (keycode == ALLEGRO_KEY_R && !game_over && !room_is_completed) {
+      if (active_card.type == CardType::SKILL_CHALLENGE) {
+        add_to_game_log("You cannot rest!");
+        return;
+      }
+
+      resting_character = (resting_character + 1) % 3;
+      if (resting_character == 1)      add_to_game_log(hero.name + " is resting.");
+      else if (resting_character == 2) add_to_game_log(companion.name + " is resting.");
+      else                             add_to_game_log("Both players active.");
+      return;
+    }
+    // REVISED NAVIGATION METHOD: TURN-AWARE DYNAMIC KEYBOARD ARROW CONTROLLERS
+    if (!is_awaiting_greatsword_choice && !is_awaiting_loot_choice && !is_awaiting_door_open && !room_is_completed) {
+      if (keycode == ALLEGRO_KEY_LEFT || keycode == ALLEGRO_KEY_RIGHT) {
+        if (current_acting_player_id == 1) {
+          hero_inv_cursor = (hero_inv_cursor == 0) ? 1 : 0;
+          add_to_game_log(hero.name + " focused Item Slot " + std::to_string(hero_inv_cursor + 1));
+        } 
+        else if (current_acting_player_id == 2) {
+          companion_inv_cursor = (companion_inv_cursor == 0) ? 1 : 0;
+          add_to_game_log(companion.name + " focused Item Slot " + std::to_string(companion_inv_cursor + 1));
+        }
+      }
+    }
+
+    // --------------------------------------------------------------------------
+    // ACTION INTERACTION E: ITEM CONSUMPTION MODIFIERS ACTIVATION ENGINE
+    // --------------------------------------------------------------------------
+    if (keycode == ALLEGRO_KEY_LSHIFT) {
+      consume_item_from_slot(hero_inventory, hero, hero_inv_cursor);
+    }
+    if (keycode == ALLEGRO_KEY_RSHIFT) {
+      consume_item_from_slot(companion_inventory, companion, companion_inv_cursor);
     }
 
     // --------------------------------------------------------------------------
@@ -1403,31 +1453,23 @@ void DarkCastleEngine::process_input_event(int keycode) {
         return;
       }
       else {
-        // ==============================================================================
-        // FIX: SYNCHRONIZED MULTI-TURN REST TRANSITION ENGINE GATES
-        // ==============================================================================
-        if (resting_character == current_acting_player_id) {
-          // 1. Process the resting player's healing calculations instantly on frame 1
+        int original_acting_id = current_acting_player_id;
+
+        if (resting_character == original_acting_id) {
           execute_combat_round();
 
-          // 2. Check if the turn transitioned context cleanly to an active fighter [ACT]
-          // If the newly selected player is NOT the resting character, force their spin timers on!
           if (resting_character != current_acting_player_id && !is_dice_animating && !room_is_completed && !game_over) {
             is_dice_animating = true;
             dice_anim_frame_counter = 0;
 
-            // Empty the active slot's text tracking variables instantly so it spins cleanly
             if (current_acting_player_id == 1) hero_last_roll_str = "";
             else                               companion_last_roll_str = "";
 
-            // Safety check: ensure the resting companion's HUD box stays completely clear
             if (resting_character == 1) hero_last_roll_str = "";
             if (resting_character == 2) companion_last_roll_str = "";
           }
         } 
         else {
-          // --- STANDARD COOPERATIVE STRIKE SEQUENCE ---
-          // This fires standard flickering animations normally if the current actor is active
           if (!is_dice_animating) {
             is_dice_animating = true;
             dice_anim_frame_counter = 0;
@@ -1444,23 +1486,6 @@ void DarkCastleEngine::process_input_event(int keycode) {
     }
 
     // --------------------------------------------------------------------------
-    // ACTION INTERACTION E: CORE TURN-BASED RECOVERY CONTROLLER ('R' KEY)
-    // --------------------------------------------------------------------------
-    if (keycode == ALLEGRO_KEY_R && !game_over && !room_is_completed) {
-      // Rest actions are strictly illegal during life-threatening puzzle challenges!
-      if (active_card.type == CardType::SKILL_CHALLENGE) {
-        add_to_game_log("You cannot rest!");
-        return; // Reject the input stream immediately
-      }
-
-      resting_character = (resting_character + 1) % 3;
-      if (resting_character == 1)      add_to_game_log(hero.name + " is resting.");
-      else if (resting_character == 2) add_to_game_log(companion.name + " is resting.");
-      else                             add_to_game_log("Both players active.");
-      return;
-    }
-
-    // --------------------------------------------------------------------------
     // ACTION INTERACTION F: ROOM COMPLETION ADVANCEMENT STEP PROGRESSOR ('N' KEY)
     // --------------------------------------------------------------------------
     if (keycode == ALLEGRO_KEY_N && !game_over) {
@@ -1471,8 +1496,8 @@ void DarkCastleEngine::process_input_event(int keycode) {
         return;
       }
 
-      bool combat_won = ((active_card.type == CardType::STANDARD_COMBAT ||
-                          active_card.type == CardType::BOSS_BATTLE) &&
+      bool combat_won = ((active_card.type == CardType::STANDARD_COMBAT || 
+                          active_card.type == CardType::BOSS_BATTLE) && 
                          live_enemy_shields.empty());
 
       if (room_is_completed || combat_won) {
@@ -1550,6 +1575,7 @@ void DarkCastleEngine::render_character_selection_menu() {
     bool is_hovered = (character_cursor_index == i);
     bool is_already_picked = (select_phase == 1 && hero.name == p.name);
 
+
     ALLEGRO_COLOR border_color = al_map_rgb(55, 55, 55);
     ALLEGRO_COLOR text_color = al_map_rgb(130, 130, 130);
 
@@ -1578,8 +1604,8 @@ void DarkCastleEngine::render_character_selection_menu() {
 
     // Clean 2-column x 4-row grid fallback boxes for the dice faces
     al_draw_text(local_font, text_color, current_x + (card_width / 2), card_y + 165, ALLEGRO_ALIGN_CENTER, "DICE:");
-    
-    int grid_start_x = current_x + 36; 
+
+    int grid_start_x = current_x + 36;
     int grid_start_y = card_y + 190;
 
     for (size_t f = 0; f < p.dice_faces.size(); ++f) {
@@ -1589,17 +1615,18 @@ void DarkCastleEngine::render_character_selection_menu() {
       int icon_y = grid_start_y + (row * 26);
 
       al_draw_rectangle(icon_x, icon_y, icon_x + 24, icon_y + 24, text_color, 1);
-      
+
       char letter = '?';
       if (p.dice_faces.at(f) == DieFace::MIGHT) letter = 'M';
       else if (p.dice_faces.at(f) == DieFace::CUNNING) letter = 'C';
       else if (p.dice_faces.at(f) == DieFace::WISDOM) letter = 'W';
       else if (p.dice_faces.at(f) == DieFace::SHIELD) letter = 'S';
-      
+
       al_draw_textf(local_font, text_color, icon_x + 12, icon_y + 4, ALLEGRO_ALIGN_CENTER, "%c", letter);
     }
 
-    if (is_already_picked) {
+    // --- ENFORCE DIRECT CURSOR STATE VALUE COMPARISONS HERE ---
+    if (select_phase == 1 && p1_char_cursor == i) {
       al_draw_filled_rectangle(current_x + 1, card_y + 1, current_x + card_width - 1, card_y + 379, al_map_rgba(5, 5, 5, 210));
       al_draw_text(local_font, al_map_rgb(200, 50, 50), current_x + (card_width / 2), card_y + 180, ALLEGRO_ALIGN_CENTER, "[ PICKED ]");
     }
@@ -1607,7 +1634,7 @@ void DarkCastleEngine::render_character_selection_menu() {
 
   // Bottom footer strings centered at 512
   al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 535, ALLEGRO_ALIGN_CENTER, "Use LEFT / RIGHT arrow keys to navigate rows.");
-  al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 560, ALLEGRO_ALIGN_CENTER, "Press ENTER or SPACE to confirm tracking selection profile.");
+  al_draw_text(local_font, al_map_rgb(90, 90, 90), 512, 560, ALLEGRO_ALIGN_CENTER, "Press ENTER or SPACE to confirm profile.");
 }
 
 
@@ -1757,7 +1784,7 @@ void DarkCastleEngine::render_active_tabletop_loop() {
       al_draw_rectangle(x1_y, card_y_top, x2_y, card_y_top + box_h, al_map_rgb(50, 150, 250), 1);
 
       std::string label_y = "[Y] " + active_card.choice_1_text;
-      std::string risk_y = "Expected Risk: " + std::to_string(active_card.choice_1_damage) + " Damage";
+      std::string risk_y = "Risk: " + std::to_string(active_card.choice_1_damage) + " Damage";
       al_draw_text(local_font, al_map_rgb(255, 255, 255), x1_y + 15, card_y_top + 15, ALLEGRO_ALIGN_LEFT, label_y.c_str());
       al_draw_text(local_font, al_map_rgb(200, 200, 200), x1_y + 15, card_y_top + 45, ALLEGRO_ALIGN_LEFT, risk_y.c_str());
       al_draw_text(local_font, al_map_rgb(130, 130, 130), x1_y + 15, card_y_top + 75, ALLEGRO_ALIGN_LEFT, "Shields to Smash:");
@@ -1781,7 +1808,7 @@ void DarkCastleEngine::render_active_tabletop_loop() {
       al_draw_rectangle(x1_n, card_y_top, x2_n, card_y_top + box_h, al_map_rgb(50, 150, 250), 1);
 
       std::string label_n = "[N] " + active_card.choice_2_text;
-      std::string risk_n = "Expected Risk: " + std::to_string(active_card.choice_2_damage) + " Damage";
+      std::string risk_n = "Risk: " + std::to_string(active_card.choice_2_damage) + " Damage";
       al_draw_text(local_font, al_map_rgb(255, 255, 255), x1_n + 15, card_y_top + 15, ALLEGRO_ALIGN_LEFT, label_n.c_str());
       al_draw_text(local_font, al_map_rgb(200, 200, 200), x1_n + 15, card_y_top + 45, ALLEGRO_ALIGN_LEFT, risk_n.c_str());
       al_draw_text(local_font, al_map_rgb(130, 130, 130), x1_n + 15, card_y_top + 75, ALLEGRO_ALIGN_LEFT, "Shields to Smash:");
@@ -1804,17 +1831,6 @@ void DarkCastleEngine::render_active_tabletop_loop() {
   } // Closes the safety gate
   // Animated Dice indicator text boxes
 
-/*
-  if (is_dice_animating) {
-    al_draw_filled_rectangle(340, center_y - 40, 460, center_y + 10, al_map_rgba(0, 0, 0, 220));
-    al_draw_rectangle(340, center_y - 40, 460, center_y + 10, al_map_rgb(255, 215, 0), 2);
-
-    char roll_view[64];
-    snprintf(roll_view, sizeof(roll_view), "ROLLING: %c  %c", p1_rolling_flicker_char, p2_rolling_flicker_char);
-    al_draw_text(local_font, al_map_rgb(255, 255, 255), 512, center_y - 20, ALLEGRO_ALIGN_CENTER, roll_view);
-  }
-*/
-
   // ==============================================================================
   // CORE PHASE PROMPT BANNER DRIFTED ABOVE SAFETY INTERCEPTS
   // ==============================================================================
@@ -1826,7 +1842,7 @@ void DarkCastleEngine::render_active_tabletop_loop() {
                  ALLEGRO_ALIGN_CENTER, "DOOR LOCKED: Press for [1] Hero or [2] for Companion to open door.");
   } else if (room_is_completed) {
     al_draw_text(local_font, al_map_rgb(50, 255, 50), center_x, base_prompt_y,
-                 ALLEGRO_ALIGN_CENTER, "ROOM RESOLVED: Press [N] to move on.");
+                 ALLEGRO_ALIGN_CENTER, "ROOM CLEARED: Press [N] to move on.");
   } else {
     al_draw_text(local_font, al_map_rgb(150, 150, 150), center_x, base_prompt_y,
                  ALLEGRO_ALIGN_CENTER, "ROOM ACTIVE: Press [SPACE] to Roll/Combat | Press [R] to alternate rest actions before rolling.");
@@ -2153,26 +2169,6 @@ void DarkCastleEngine::draw_ui_overlay_prompts() {
 }
 
 
-void DarkCastleEngine::render_game_over_lose_screen() {
-  al_draw_filled_rectangle(0, 0, 800, 600, al_map_rgba(15, 0, 0, 240));
-  al_draw_rectangle(50, 50, 750, 550, al_map_rgb(120, 20, 20), 3);
-  al_draw_text(local_font, al_map_rgb(220, 40, 40), 400, 160,
-               ALLEGRO_ALIGN_CENTER, "YOU PERISHED IN THE DARK");
-  al_draw_text(local_font, al_map_rgb(150, 150, 150), 400, 220,
-               ALLEGRO_ALIGN_CENTER,
-               "The castle claims another soul. Your bones will rot in these "
-               "cells forever.");
-
-  int rooms_cleared = 15 - static_cast<int>(current_game_deck.size());
-  std::string stats_str = "Rooms Successfully Breached: " +
-                          std::to_string(std::max(0, rooms_cleared)) + " / 15";
-  al_draw_text(local_font, al_map_rgb(200, 200, 200), 400, 320,
-               ALLEGRO_ALIGN_CENTER, stats_str.c_str());
-  al_draw_text(local_font, al_map_rgb(255, 255, 255), 400, 480,
-               ALLEGRO_ALIGN_CENTER,
-               "Press ESCAPE to abandon run and exit game client.");
-}
-
 void DarkCastleEngine::render_game_victory_screen() {
   al_draw_filled_rectangle(0, 0, 800, 600, al_map_rgba(0, 15, 0, 240));
   al_draw_rectangle(50, 50, 750, 550, al_map_rgb(218, 165, 32), 3);
@@ -2369,61 +2365,68 @@ void DarkCastleEngine::distribute_challenge_reward(const ChapterCard& card) {
   }
 }
 
+
 void DarkCastleEngine::render_loot_distribution_overlay() {
-  if (!is_awaiting_loot_choice) return;
+  // Perfect horizontal layout centering positions for a 1024 width window canvas
+  int panel_x1 = 242;
+  int panel_y1 = 330;
+  int panel_x2 = 782; // 540 pixels wide
+  
+  // --- FIX: HEIGHT EXTENSION TO ENFORCE COMPLETELY CLOSED CONTAINER BOUNDS ---
+  // Increased from its original clipping height down by 30px to clear text!
+  int panel_y2 = 680; 
 
-  // Center a prominent 520x260 modal dialog box right over your 1024x768 display window
-  int center_x = 512, center_y = 384, box_w = 520, box_h = 260;
-  int x1 = center_x - (box_w / 2), y1 = center_y - (box_h / 2); // X1: 252, Y1: 254
-  int x2 = center_x + (box_w / 2), y2 = center_y + (box_h / 2); // X2: 772, Y2: 514
+  // Draw the main background box container
+  al_draw_filled_rectangle(panel_x1, panel_y1, panel_x2, panel_y2, al_map_rgb(15, 15, 18));
+  al_draw_rectangle(panel_x1, panel_y1, panel_x2, panel_y2, al_map_rgb(212, 175, 55), 2); // Gold border
 
-  // 1. Draw backdrop dim shield and golden modal borders
-  al_draw_filled_rectangle(0, 0, 1024, 768, al_map_rgba(10, 10, 10, 200));
-  al_draw_filled_rectangle(x1, y1, x2, y2, al_map_rgb(20, 20, 25));
-  al_draw_rectangle(x1, y1, x2, y2, al_map_rgb(212, 175, 55), 2); // Gold frame line
+  int center_x = 512;
 
-  // 2. Draw Loot Title Header Strings
-  al_draw_text(local_font, al_map_rgb(212, 175, 55), center_x, y1 + 25,
+  // Header Title
+  al_draw_text(local_font, al_map_rgb(212, 175, 55), center_x, panel_y1 + 25,
                ALLEGRO_ALIGN_CENTER, "--- TREASURE DISCOVERED ---");
 
-  std::string item_title = pending_looted_item.name + 
-      (pending_looted_item.is_2handed ? " [TWO-HANDED WEAPON]" : " [ONE-HANDED GEAR]");
-  
-  al_draw_text(local_font, al_map_rgb(255, 255, 255), center_x, y1 + 60,
-               ALLEGRO_ALIGN_CENTER, item_title.c_str());
+  // Item Title (Preserves your original format: Name [SPECIAL_ACTION_TYPE])
+  std::string name_line = pending_looted_item.name;
+  if (!pending_looted_item.special_action_type.empty()) {
+    name_line += " [" + pending_looted_item.special_action_type + "]";
+  }
+  al_draw_text(local_font, al_map_rgb(255, 255, 255), center_x, panel_y1 + 65,
+               ALLEGRO_ALIGN_CENTER, name_line.c_str());
 
-  // Render the long item card description wrapped cleanly within a 460px row boundary line
-  al_draw_multiline_text(local_font, al_map_rgb(150, 150, 150), center_x, y1 + 90,
-                         460, 20, ALLEGRO_ALIGN_CENTER, pending_looted_item.description.c_str());
+  // Item Effect Description Details Pass (Uses your correct .description field!)
+  al_draw_text(local_font, al_map_rgb(170, 170, 175), center_x, panel_y1 + 105,
+               ALLEGRO_ALIGN_CENTER, pending_looted_item.description.c_str());
 
-  // 3. Render Highlighting Allocation Selection Button Fields
-  int choice_y = y1 + 160;
-  int btn_w = 200, btn_h = 42;
+  // --------------------------------------------------------------------------
+  // ALLOCATOR PLAYER BUTTON TARGET CELLS
+  // --------------------------------------------------------------------------
+  int btn_y = panel_y1 + 165;
+  int btn_w = 160;
+  int btn_h = 45;
 
-  // Evaluate color highlighting offsets based on cursor indexes
-  ALLEGRO_COLOR h_color = (loot_target_player_cursor == 0) ? al_map_rgb(255, 215, 0) : al_map_rgb(60, 60, 65);
-  ALLEGRO_COLOR c_color = (loot_target_player_cursor == 1) ? al_map_rgb(255, 215, 0) : al_map_rgb(60, 60, 65);
-  
-  ALLEGRO_COLOR h_text = (loot_target_player_cursor == 0) ? al_map_rgb(255, 255, 255) : al_map_rgb(110, 110, 115);
-  ALLEGRO_COLOR c_text = (loot_target_player_cursor == 1) ? al_map_rgb(255, 255, 255) : al_map_rgb(110, 110, 115);
+  // Left Button: Hero (Player 1)
+  int btn1_x1 = center_x - 190;
+  ALLEGRO_COLOR b1_col = (loot_target_player_cursor == 0) ? al_map_rgb(212, 175, 55) : al_map_rgb(45, 45, 50);
+  al_draw_rectangle(btn1_x1, btn_y, btn1_x1 + btn_w, btn_y + btn_h, b1_col, (loot_target_player_cursor == 0) ? 2 : 1);
+  al_draw_text(local_font, (loot_target_player_cursor == 0) ? al_map_rgb(255, 255, 255) : al_map_rgb(110, 110, 115),
+               btn1_x1 + (btn_w / 2), btn_y + 12, ALLEGRO_ALIGN_CENTER, hero.name.c_str());
 
-  // --- BUTTON 1: ASSIGN TO HERO (P1) ---
-  int b1_x1 = center_x - 220;
-  al_draw_filled_rectangle(b1_x1, choice_y, b1_x1 + btn_w, choice_y + btn_h, al_map_rgb(30, 30, 35));
-  al_draw_rectangle(b1_x1, choice_y, b1_x1 + btn_w, choice_y + btn_h, h_color, (loot_target_player_cursor == 0) ? 2 : 1);
-  al_draw_text(local_font, h_text, b1_x1 + (btn_w / 2), choice_y + 12, ALLEGRO_ALIGN_CENTER, hero.name.c_str());
+  // Right Button: Companion (Player 2)
+  int btn2_x1 = center_x + 30;
+  ALLEGRO_COLOR b2_col = (loot_target_player_cursor == 1) ? al_map_rgb(212, 175, 55) : al_map_rgb(45, 45, 50);
+  al_draw_rectangle(btn2_x1, btn_y, btn2_x1 + btn_w, btn_y + btn_h, b2_col, (loot_target_player_cursor == 1) ? 2 : 1);
+  al_draw_text(local_font, (loot_target_player_cursor == 1) ? al_map_rgb(255, 255, 255) : al_map_rgb(110, 110, 115),
+               btn2_x1 + (btn_w / 2), btn_y + 12, ALLEGRO_ALIGN_CENTER, companion.name.c_str());
 
-  // --- BUTTON 2: ASSIGN TO COMPANION (P2) ---
-  int b2_x1 = center_x + 20;
-  al_draw_filled_rectangle(b2_x1, choice_y, b2_x1 + btn_w, choice_y + btn_h, al_map_rgb(30, 30, 35));
-  al_draw_rectangle(b2_x1, choice_y, b2_x1 + btn_w, choice_y + btn_h, c_color, (loot_target_player_cursor == 1) ? 2 : 1);
-  al_draw_text(local_font, c_text, b2_x1 + (btn_w / 2), choice_y + 12, ALLEGRO_ALIGN_CENTER, companion.name.c_str());
-
-  // 4. Interaction Instructions Guide Footnote
-  std::string nav_string = "Navigate: [LEFT/RIGHT Arrows]  |  Confirm: [ENTER/SPACEBAR]  |  Discard: [X]";
-  al_draw_text(local_font, al_map_rgb(150, 150, 155), center_x, y2 - 30,
-               ALLEGRO_ALIGN_CENTER, nav_string.c_str());
+  // --------------------------------------------------------------------------
+  // FOOTER TEXT COORDINATES DOWNWARD TO MATCH NEW BOX HEIGHT
+  // --------------------------------------------------------------------------
+  al_draw_text(local_font, al_map_rgb(140, 140, 145), center_x, panel_y2 - 35,
+               ALLEGRO_ALIGN_CENTER, "Navigate: [LEFT/RIGHT Arrows] | Confirm: [ENTER/SPACEBAR] | Discard: [X]");
 }
+
+
 
 void DarkCastleEngine::render_victory_splash_overlay() {
   // Use menu_title_font if loaded, otherwise fall back to local_font safely
@@ -2448,30 +2451,35 @@ void DarkCastleEngine::render_victory_splash_overlay() {
 
   // 4. Interaction Guidelines Footnote Indicator
   al_draw_text(local_font, al_map_rgb(120, 150, 120), center_x, center_y + 60,
-               ALLEGRO_ALIGN_CENTER, "Press [ENTER] or [SPACEBAR] to return to the Main Menu");
+               ALLEGRO_ALIGN_CENTER, "Press [ENTER] or [SPACEBAR] for MAIN MENU");
 }
 
 void DarkCastleEngine::render_loss_splash_overlay() {
+  // ADJUST VERTICAL COORDINATES FOR PERFECT VISUAL SYMMETRY
+  int panel_x1 = 132;
+  int panel_y1 = 224; // <-- SHIFTED UP FROM 330 FOR MARGIN ALIGNMENT
+  int panel_x2 = 892;
+  int panel_y2 = 544; // <-- SHIFTED UP FROM 650 TO CLOSE THE 320px CONTAINER BOUNDS
+
+  // Draw the main background box container overlay
+  al_draw_filled_rectangle(panel_x1, panel_y1, panel_x2, panel_y2, al_map_rgb(15, 15, 18));
+  al_draw_rectangle(panel_x1, panel_y1, panel_x2, panel_y2, al_map_rgb(200, 50, 50), 2); // Grim red border
+
+  int center_x = 512;
+
+  // Header Title - Dedicated large font asset for headers
   ALLEGRO_FONT* header_font = menu_title_font ? menu_title_font : local_font;
-  int center_x = 512, center_y = 384;
-
-  // 1. Draw backdrop dim filter and crimson modal boundaries
-  al_draw_filled_rectangle(0, 0, 1024, 768, al_map_rgba(15, 5, 5, 235)); // Heavy crimson tint
-  
-  al_draw_filled_rectangle(center_x - 300, center_y - 120, center_x + 300, center_y + 100, al_map_rgb(25, 20, 20));
-  al_draw_rectangle(center_x - 300, center_y - 120, center_x + 300, center_y + 100, al_map_rgb(220, 50, 50), 3); // Thick Crimson Frame
-
-  // 2. Large 36pt Title Banner Text
-  al_draw_text(header_font, al_map_rgb(220, 50, 50), center_x, center_y - 85,
+  al_draw_text(header_font, al_map_rgb(200, 50, 50), center_x, panel_y1 + 45,
                ALLEGRO_ALIGN_CENTER, "YOU PERISHED IN THE DARK");
 
-  // 3. Narrative Description Text
-  al_draw_text(local_font, al_map_rgb(240, 220, 220), center_x, center_y - 20,
+  // Biographical Ticker Lines
+  al_draw_text(local_font, al_map_rgb(180, 180, 185), center_x, panel_y1 + 125,
                ALLEGRO_ALIGN_CENTER, "A fatal blow strikes down your party. Your names are forgotten.");
-  al_draw_text(local_font, al_map_rgb(170, 140, 140), center_x, center_y + 10,
+
+  al_draw_text(local_font, al_map_rgb(140, 140, 145), center_x, panel_y1 + 165,
                ALLEGRO_ALIGN_CENTER, "The castle corridors claim another group of eternal souls...");
 
-  // 4. Interaction Guidelines Footnote Indicator
-  al_draw_text(local_font, al_map_rgb(150, 110, 110), center_x, center_y + 60,
+  // Bottom Interactive Reset Guidance Line
+  al_draw_text(local_font, al_map_rgb(110, 110, 115), center_x, panel_y2 - 45,
                ALLEGRO_ALIGN_CENTER, "Press [ENTER] or [SPACEBAR] to return to the Main Menu");
 }

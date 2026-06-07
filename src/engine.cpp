@@ -2233,7 +2233,7 @@ void DarkCastleEngine::draw_scene_frame() {
       // EXECUTE THE COMBAT STEP CALCULATIONS NATIVELY ON ANIMATION SETTLE ---
       execute_combat_round();
       // Fire contextual audio hooks matching the newly settled active face card
-      play_context_dice_sfx(active_rolled_face);
+      //play_context_dice_sfx(active_rolled_face);
     }
   }
 

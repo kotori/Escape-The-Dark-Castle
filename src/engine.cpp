@@ -866,21 +866,17 @@ void DarkCastleEngine::execute_combat_round() {
   }
 
   // ==============================================================================
-  // STEP B-2: TURN ROUTING AND RETALIATION TRIGGERS FOR STANDARD ATTACK PASSES
+  // STEP B: INTELLIGENT INITIALIZATION AND TURN ROUTING
   // ==============================================================================
-  bool round_is_complete = (current_acting_player_id != current_door_opener_id);
+  bool party_is_split = (resting_character > 0);
 
-  if (!round_is_complete) {
-    current_acting_player_id = next_player_id;
-    add_to_game_log("It is now " + ((current_acting_player_id == 1) ? hero.name : companion.name) + "'s turn to strike.");
-  } 
-  else {
-    current_acting_player_id = current_door_opener_id;
-    add_to_game_log("The enemy counter-attacks!");
+  if (party_is_split) {
+    // --- SCENARIO A: SOLO ENGAGEMENT ROUTING MATRIX ---
+    add_to_game_log("The enemy counter-attacks the active combatant!");
 
     int incoming_base_damage = active_card.attack_damage;
 
-    auto apply_enemy_damage = [&](Prisoner& p_actor, std::vector<ItemCard>& p_inv, int char_id, bool has_rolled_block) {
+    auto apply_solo_enemy_damage = [&](Prisoner& p_actor, std::vector<ItemCard>& p_inv, int char_id, bool has_rolled_block) {
       if (resting_character == char_id || has_rolled_block) return;
 
       int armor_mod = 0;
@@ -908,12 +904,72 @@ void DarkCastleEngine::execute_combat_round() {
       }
     };
 
-    apply_enemy_damage(hero, hero_inventory, 1, hero_blocked_this_round);
-    apply_enemy_damage(companion, companion_inventory, 2, comp_blocked_this_round);
+    apply_solo_enemy_damage(hero, hero_inventory, 1, hero_blocked_this_round);
+    apply_solo_enemy_damage(companion, companion_inventory, 2, comp_blocked_this_round);
+
+    // --- FIX: ALLOW TURN TO PASS TO THE RESTING PLAYER SO THEY HEAL NEXT ROUND ---
+    // Instead of locking onto the fighter, pass turn order to the next player inline!
+    current_acting_player_id = (current_acting_player_id == 1) ? 2 : 1;
+    
+    // Clear out the round block flags immediately to prepare for the next step pass
+    hero_blocked_this_round = false;
+    comp_blocked_this_round = false;
 
     if (hero.current_hp <= 0 || companion.current_hp <= 0) {
       game_over = true;
-      add_to_game_log("A companion has fallen in battle! The run has failed.");
+      add_to_game_log("A prisoner has fallen! The run has failed.");
+    }
+  }
+  else {
+    // --- SCENARIO B: STANDARD COOPERATIVE 2-PLAYER ROUTING MATRIX ---
+    // This is your original code logic flow that executes ONLY if no one is resting
+    bool round_is_complete = (current_acting_player_id != current_door_opener_id);
+
+    if (!round_is_complete) {
+      current_acting_player_id = next_player_id;
+      add_to_game_log("It is now " + ((current_acting_player_id == 1) ? hero.name : companion.name) + "'s turn to strike.");
+    } 
+    else {
+      current_acting_player_id = current_door_opener_id;
+      add_to_game_log("The enemy counter-attacks!");
+
+      int incoming_base_damage = active_card.attack_damage;
+
+      auto apply_coop_enemy_damage = [&](Prisoner& p_actor, std::vector<ItemCard>& p_inv, int char_id, bool has_rolled_block) {
+        if (has_rolled_block) return;
+
+        int armor_mod = 0;
+        bool heavy_shield_spent = false;
+
+        auto item_it = p_inv.begin();
+        while (item_it != p_inv.end()) {
+          if (item_it->special_action_type == "PERMANENT_PLATE_ARMOR") {
+            armor_mod += item_it->attack_amount;
+            ++item_it;
+          } else if (item_it->special_action_type == "HEAVY_SHIELD_ROUND") {
+            heavy_shield_spent = true;
+            item_it = p_inv.erase(item_it);
+          } else {
+            ++item_it;
+          }
+        }
+
+        if (heavy_shield_spent) return;
+
+        int final_damage = std::max(0, incoming_base_damage - armor_mod);
+        if (final_damage > 0) {
+          p_actor.current_hp = std::max(0, p_actor.current_hp - final_damage);
+          add_to_game_log(p_actor.name + " sustained -" + std::to_string(final_damage) + " enemy combat damage!");
+        }
+      };
+
+      apply_coop_enemy_damage(hero, hero_inventory, 1, hero_blocked_this_round);
+      apply_coop_enemy_damage(companion, companion_inventory, 2, comp_blocked_this_round);
+
+      if (hero.current_hp <= 0 || companion.current_hp <= 0) {
+        game_over = true;
+        add_to_game_log("A companion has fallen in battle! The run has failed.");
+      }
     }
   }
 }
@@ -984,7 +1040,7 @@ void DarkCastleEngine::process_input_event(int keycode) {
   if (current_scene == SCENE_GAMEPLAY) {
     
 
-if (game_over) {
+    if (game_over) {
       if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
         // Reset core game state variables completely
         game_over = false;
@@ -1318,7 +1374,6 @@ if (game_over) {
                                 (roll == DieFace::CUNNING) ? "Cunning" :
                                 (roll == DieFace::WISDOM) ? "Wisdom" : "Shield";
 
-        // RECORD PUZZLE ROLL OUTCOMES NATIVELY INTO HOOK STRINGS
         if (current_door_opener_id == 1) {
           hero_last_roll_str = roll_name;
         } else {
@@ -1349,27 +1404,40 @@ if (game_over) {
       }
       else {
         // ==============================================================================
-        // FIX: INTERCEPT AND BYPASS ANIMATIONS FOR RESTING CHARACTERS INSTANTLY
+        // FIX: SYNCHRONIZED MULTI-TURN REST TRANSITION ENGINE GATES
         // ==============================================================================
         if (resting_character == current_acting_player_id) {
-          // Skip the 30-frame animation timers and rattle sounds entirely on frame 1!
+          // 1. Process the resting player's healing calculations instantly on frame 1
           execute_combat_round();
-        } 
-        else if (!is_dice_animating) {
-          // Only trigger the flickering visual loops if the character is actively fighting [ACT]
-          is_dice_animating = true;
-          dice_anim_frame_counter = 0;
 
-          // Wipe the old string text instantly so the box is empty during the rolling animation
-          if (current_acting_player_id == 1) {
-            hero_last_roll_str = "";
-          } else {
-            companion_last_roll_str = "";
+          // 2. Check if the turn transitioned context cleanly to an active fighter [ACT]
+          // If the newly selected player is NOT the resting character, force their spin timers on!
+          if (resting_character != current_acting_player_id && !is_dice_animating && !room_is_completed && !game_over) {
+            is_dice_animating = true;
+            dice_anim_frame_counter = 0;
+
+            // Empty the active slot's text tracking variables instantly so it spins cleanly
+            if (current_acting_player_id == 1) hero_last_roll_str = "";
+            else                               companion_last_roll_str = "";
+
+            // Safety check: ensure the resting companion's HUD box stays completely clear
+            if (resting_character == 1) hero_last_roll_str = "";
+            if (resting_character == 2) companion_last_roll_str = "";
           }
-          
-          // SAFETY OVERRIDE: If the companion is resting, clear their box too
-          if (resting_character == 1) hero_last_roll_str = "";
-          if (resting_character == 2) companion_last_roll_str = "";
+        } 
+        else {
+          // --- STANDARD COOPERATIVE STRIKE SEQUENCE ---
+          // This fires standard flickering animations normally if the current actor is active
+          if (!is_dice_animating) {
+            is_dice_animating = true;
+            dice_anim_frame_counter = 0;
+
+            if (current_acting_player_id == 1) hero_last_roll_str = "";
+            else                               companion_last_roll_str = "";
+
+            if (resting_character == 1) hero_last_roll_str = "";
+            if (resting_character == 2) companion_last_roll_str = "";
+          }
         }
         return;
       }

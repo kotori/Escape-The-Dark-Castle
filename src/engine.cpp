@@ -1021,6 +1021,8 @@ void DarkCastleEngine::process_input_event(int keycode) {
   // SCENE CONTEXT LOOP B: COOPERATIVE PRISONER ROW SELECTOR MENUS
   // ==============================================================================
   if (current_scene == SCENE_CHARACTER_SELECT) {
+    
+    // --- STEP 1: ISOLATED DIRECTIONAL SELECTION CONTROLS ---
     if (select_phase == 0) {
       if (keycode == ALLEGRO_KEY_LEFT || keycode == ALLEGRO_KEY_A) {
         p1_char_cursor = (p1_char_cursor - 1 + 6) % 6;
@@ -1029,21 +1031,8 @@ void DarkCastleEngine::process_input_event(int keycode) {
         p1_char_cursor = (p1_char_cursor + 1) % 6;
       }
       character_cursor_index = p1_char_cursor;
-
-      if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
-        select_phase = 1;
-        if (p2_char_cursor == p1_char_cursor) {
-          p2_char_cursor = (p2_char_cursor + 1) % 6;
-        }
-        character_cursor_index = p2_char_cursor;
-        add_to_game_log("Player 1 locked choice. Player 2 choose your prisoner.");
-        return;
-      }
-    }
+    } 
     else if (select_phase == 1) {
-      static double phase_1_start_time = 0.0;
-      if (phase_1_start_time == 0.0) phase_1_start_time = al_get_time();
-
       if (keycode == ALLEGRO_KEY_LEFT || keycode == ALLEGRO_KEY_A) {
         p2_char_cursor = (p2_char_cursor - 1 + 6) % 6;
       }
@@ -1051,16 +1040,40 @@ void DarkCastleEngine::process_input_event(int keycode) {
         p2_char_cursor = (p2_char_cursor + 1) % 6;
       }
       character_cursor_index = p2_char_cursor;
+    }
 
-      if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
-        if ((al_get_time() - phase_1_start_time) < 0.22) return;
+    // --- STEP 2: PROTECTED TURN-BASED CONFIRMATION PASS ---
+    if (keycode == ALLEGRO_KEY_ENTER || keycode == ALLEGRO_KEY_SPACE) {
+      
+      // Enforce a hard time-gate interlock to filter out rapid multi-frame duplicate keystrokes
+      static double last_selection_click_time = 0.0;
+      double current_time = al_get_time();
+      if ((current_time - last_selection_click_time) < 0.25) {
+        return; // Discard duplicate frame stutters completely!
+      }
+      last_selection_click_time = current_time;
 
+      // Phase 0 Confirmation: Player 1 Locks In
+      if (select_phase == 0) {
+        select_phase = 1;
+        
+        // Prevent Player 2 from starting on the exact same card row
+        if (p2_char_cursor == p1_char_cursor) {
+          p2_char_cursor = (p2_char_cursor + 1) % 6;
+        }
+        
+        character_cursor_index = p2_char_cursor;
+        add_to_game_log("Player 1 locked choice. Player 2 choose your prisoner.");
+        return; 
+      }
+      // Phase 1 Confirmation: Player 2 Final Submission Pass
+      else if (select_phase == 1) {
         if (p1_char_cursor == p2_char_cursor) {
           add_to_game_log("Selection Blocked: Both players cannot choose the exact same prisoner!");
           return;
         }
 
-        // Final attributes allocations
+        // Assign Player 1 attributes dynamically using your base variables
         if (p1_char_cursor == 0) { hero.name = "The Abbot"; hero.max_hp = 12; hero.dice_faces = {DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::WISDOM, DieFace::SHIELD, DieFace::SHIELD}; }
         else if (p1_char_cursor == 1) { hero.name = "The Tailor"; hero.max_hp = 18; hero.dice_faces = {DieFace::CUNNING, DieFace::CUNNING, DieFace::WISDOM, DieFace::WISDOM, DieFace::MIGHT, DieFace::SHIELD}; }
         else if (p1_char_cursor == 2) { hero.name = "The Smith"; hero.max_hp = 16; hero.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::MIGHT, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
@@ -1069,16 +1082,16 @@ void DarkCastleEngine::process_input_event(int keycode) {
         else if (p1_char_cursor == 5) { hero.name = "The Miller"; hero.max_hp = 17; hero.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::CUNNING, DieFace::SHIELD}; }
         hero.current_hp = hero.max_hp;
 
+        // Assign Player 2 attributes dynamically using your base variables
         if (p2_char_cursor == 0) { companion.name = "The Abbot"; companion.max_hp = 12; companion.dice_faces = {DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::WISDOM, DieFace::SHIELD, DieFace::SHIELD}; }
         else if (p2_char_cursor == 1) { companion.name = "The Tailor"; companion.max_hp = 18; companion.dice_faces = {DieFace::CUNNING, DieFace::CUNNING, DieFace::WISDOM, DieFace::WISDOM, DieFace::MIGHT, DieFace::SHIELD}; }
-        else if (p2_char_cursor == 2) { companion.name = "The Smith"; companion.max_hp = 16; companion.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::MIGHT, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
+        else if (p2_char_cursor == 2) { companion.name = "The Smith"; companion.max_hp = 16; companion.dice_faces = {DieFace::MIGHT, DieFace::MIGHT,DieFace::MIGHT, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
         else if (p2_char_cursor == 3) { companion.name = "The Cook"; companion.max_hp = 14; companion.dice_faces = {DieFace::CUNNING, DieFace::CUNNING, DieFace::CUNNING, DieFace::MIGHT, DieFace::WISDOM, DieFace::SHIELD}; }
         else if (p2_char_cursor == 4) { companion.name = "The Tanner"; companion.max_hp = 15; companion.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::CUNNING, DieFace::CUNNING, DieFace::WISDOM, DieFace::SHIELD}; }
         else if (p2_char_cursor == 5) { companion.name = "The Miller"; companion.max_hp = 17; companion.dice_faces = {DieFace::MIGHT, DieFace::MIGHT, DieFace::WISDOM, DieFace::WISDOM, DieFace::CUNNING, DieFace::SHIELD}; }
         companion.current_hp = companion.max_hp;
 
         select_phase = 0;
-        phase_1_start_time = 0.0;
 
         hero_inventory.clear();
         companion_inventory.clear();
@@ -1093,6 +1106,7 @@ void DarkCastleEngine::process_input_event(int keycode) {
     }
     return;
   }
+
 
   // ==============================================================================
   // SCENE CONTEXT LOOP C: ACTIVE GAMEPLAY MODE

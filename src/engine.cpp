@@ -1348,22 +1348,28 @@ if (game_over) {
         return;
       }
       else {
-        // COMBAT CARDS TRIGGER THE ANIMATION TIMERS FIRST ---
-        if (!is_dice_animating) {
+        // ==============================================================================
+        // FIX: INTERCEPT AND BYPASS ANIMATIONS FOR RESTING CHARACTERS INSTANTLY
+        // ==============================================================================
+        if (resting_character == current_acting_player_id) {
+          // Skip the 30-frame animation timers and rattle sounds entirely on frame 1!
+          execute_combat_round();
+        } 
+        else if (!is_dice_animating) {
+          // Only trigger the flickering visual loops if the character is actively fighting [ACT]
           is_dice_animating = true;
           dice_anim_frame_counter = 0;
-          
+
           // Wipe the old string text instantly so the box is empty during the rolling animation
           if (current_acting_player_id == 1) {
             hero_last_roll_str = "";
           } else {
             companion_last_roll_str = "";
           }
-          // SAFETY OVERRIDE: If the NEXT player inline is resting, clear their box too
-          // so old lingering cards don't stay drawn on screen!
+          
+          // SAFETY OVERRIDE: If the companion is resting, clear their box too
           if (resting_character == 1) hero_last_roll_str = "";
           if (resting_character == 2) companion_last_roll_str = "";
-
         }
         return;
       }
